@@ -47,8 +47,6 @@ jiter 0.8.2
 joblib 1.4.2
 jsonlines 4.0.0
 kiwisolver 1.4.8
-llava 1.7.0.dev0 ./LLaVA-NeXT
-lmms_eval 0.2.4 ./lmms-eval
 loguru 0.7.3
 lxml 5.3.1
 MarkupSafe 3.0.2
@@ -101,7 +99,6 @@ pydantic 2.10.6
 pydantic_core 2.27.2
 pyparsing 3.2.1
 pytablewriter 1.2.1
-python-dateutil 2.9.0.post0
 pytz 2025.1
 PyYAML 6.0.2
 regex 2024.11.6
