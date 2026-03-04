@@ -108,7 +108,7 @@ def main(args):
         else:
             outs.append(fn)
 
-    score_path = os.path.join(out_score_path,'selected_frames.json')
+    score_path = os.path.join(out_score_path,f'selected_frames_{num}.json')
     with open(score_path,'w') as f:
         json.dump(outs,f)
 

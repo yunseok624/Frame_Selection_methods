@@ -7,13 +7,14 @@ def parser_args():
     parser.add_argument('--base_score_path', type=str, default='./selected_frames/longvideobench/blip')
     parser.add_argument('--dataset_name', type=str, default='LongVideoBench')
     parser.add_argument('--score_type', type=str, default='selected_frames')
+    parser.add_argument('--num_frames', type=int, default=64)
     args = parser.parse_args()
     return args
 
 if __name__ == '__main__':
     args = parser_args()
     anno_path = os.path.join(args.base_anno_path, args.dataset_name,'include_frame_idx.json')
-    score_path = os.path.join(args.base_score_path, f'{args.score_type}.json')
+    score_path = os.path.join(args.base_score_path, f'{args.score_type}_{args.num_frames}.json')
 
     with open(anno_path, 'r') as f:
         anno = json.load(f)
