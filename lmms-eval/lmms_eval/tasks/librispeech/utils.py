@@ -1,7 +1,6 @@
 import os
 import re
 import unicodedata
-from typing import Any
 
 import editdistance as ed  # TODO: new package
 import zhconv  # TODO: new package
@@ -65,11 +64,11 @@ PUNCS = "!,.?;:"
 
 def remove_sp(text, language):
     gt = re.sub(r"<\|.*?\|>", " ", text)
-    gt = re.sub(r"\s+", r" ", gt)  # Replace consecutive spaces in the text with a single space.
+    gt = re.sub(rf"\s+", r" ", gt)  # Replace consecutive spaces in the text with a single space.
     gt = re.sub(f" ?([{PUNCS}])", r"\1", gt)
     gt = gt.lstrip(" ")
     if language == "zh":
-        gt = re.sub(r"\s+", r"", gt)
+        gt = re.sub(rf"\s+", r"", gt)
     return gt
 
 
@@ -180,10 +179,6 @@ def compute_wer(refs, hyps, language):
         distance += ed.eval(ref_items, pred_items)
         ref_length += len(ref_items)
     return distance / ref_length
-
-
-def librispeech_doc_to_target(doc: Any):
-    return doc["gt"]
 
 
 def librispeech_wer(results, args):

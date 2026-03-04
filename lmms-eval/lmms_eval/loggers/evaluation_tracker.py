@@ -15,6 +15,7 @@ from huggingface_hub.utils import build_hf_headers, get_session, hf_raise_for_st
 
 from lmms_eval.utils import (
     eval_logger,
+    get_datetime_str,
     get_file_datetime,
     get_file_task_name,
     get_results_filenames,
@@ -67,7 +68,7 @@ class GeneralConfigTracker:
             return args_after_key.split(",")[0]
 
         # order does matter, e.g. peft and delta are provided together with pretrained
-        prefixes = ["peft=", "delta=", "pretrained=", "model=", "model_version=", "model_name=", "model_id=", "path=", "engine="]
+        prefixes = ["peft=", "delta=", "pretrained=", "model=", "path=", "engine="]
         for prefix in prefixes:
             if prefix in model_args:
                 return extract_model_name(model_args, prefix)

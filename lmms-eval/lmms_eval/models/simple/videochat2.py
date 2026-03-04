@@ -1,4 +1,5 @@
 import logging
+import os
 from typing import List, Tuple
 
 import decord
@@ -15,6 +16,7 @@ from PIL import Image
 from tqdm import tqdm
 from transformers import (
     AutoModel,
+    AutoTokenizer,
     StoppingCriteria,
     StoppingCriteriaList,
 )

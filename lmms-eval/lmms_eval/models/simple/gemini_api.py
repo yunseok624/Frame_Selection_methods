@@ -6,6 +6,7 @@ import re
 import time
 from typing import List, Tuple
 
+import datasets
 from accelerate import Accelerator, DistributedType
 from loguru import logger as eval_logger
 from PIL import Image

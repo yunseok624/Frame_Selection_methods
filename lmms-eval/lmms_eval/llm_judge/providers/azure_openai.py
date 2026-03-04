@@ -1,6 +1,6 @@
 import os
 import time
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Union
 
 import requests
 from loguru import logger as eval_logger

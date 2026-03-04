@@ -3,6 +3,7 @@ import json
 import os
 import random
 import re
+import sys
 
 from tqdm import tqdm
 from transformers import AutoTokenizer
@@ -62,7 +63,7 @@ def refine_samples_vllm(llm, sampling_params, tokenizer, sample_jsonl, output_js
         input_text = f"The options are: {options}\n\n The model response is: {raw_pred}"
         try:
             choice = extract_choice_vllm(llm, sampling_params, tokenizer, input_text, mcq)
-        except Exception:
+        except Exception as e:
             choice = None
         if choice is None:
             answer = sample["target"]
@@ -91,7 +92,7 @@ def postprocess_jsonl(llm, sampling_params, tokenizer, sample_jsonl, output_json
 
     updated_samples = refine_samples_vllm(llm, sampling_params, tokenizer, sample_jsonl, output_jsonl, mcq)
 
-    print("Computing score ...")
+    print(f"Computing score ...")
     processed = []
     for item in tqdm(updated_samples, desc="Computing scores..."):
         pred_raw = item["resps"][0][0] if isinstance(item["resps"][0], list) else item["resps"][0]

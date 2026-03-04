@@ -3,7 +3,12 @@ import logging
 import re
 from collections import defaultdict
 
+import numpy as np
+import pandas as pd
 from PIL import Image
+
+from lmms_eval.filters.extraction import ExtendedRegexFilter
+from lmms_eval.filters.transformation import MapFilter
 
 eval_logger = logging.getLogger("lmms-eval")
 
@@ -18,12 +23,11 @@ def msr_doc_to_text(doc, lmms_eval_specific_kwargs=None):
 
 
 def msr_doc_to_visual(doc):
+    # image_list = [image.convert("RGB") for image in doc["images"]]
     image_list = []
     for img_data in doc["images"]:
-        if isinstance(img_data, Image.Image):
-            image = img_data.convert("RGB")
-        else:
-            image = Image.open(io.BytesIO(img_data)).convert("RGB")
+        image = Image.open(io.BytesIO(img_data))
+        image = image.convert("RGB")
         image_list.append(image)
     return image_list
 
@@ -62,7 +66,7 @@ def extract_single_choice_with_word_boundary(pred, gt):
             return 1.0
         elif predict[0:14] == "the answer is " and answer == predict[14]:
             return 1.0
-    except Exception:
+    except Exception as e:
         return 0.0
     return 0.0
 

@@ -44,9 +44,9 @@ _DESCRIPTION = "A largescale benchmark covering 9.6K human-written questions as 
 def get_builder_config(VERSION):
     builder_config = [
         datasets.BuilderConfig(
-            name="ChartQA",
+            name=f"ChartQA",
             version=VERSION,
-            description="ChartQA",
+            description=f"ChartQA",
         )
     ]
     return builder_config

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 import yaml
+from decord import VideoReader, cpu
 
 import lmms_eval.tasks._task_utils.file_utils as file_utils
 

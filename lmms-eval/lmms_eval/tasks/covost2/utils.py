@@ -1,3 +1,4 @@
+import os
 import re
 import unicodedata
 
@@ -75,7 +76,7 @@ def covost2_bleu_en(results, args):
 
 def remove_sp(text):
     gt = re.sub(r"<\|.*?\|>", " ", text)
-    gt = re.sub(r"\s+", r" ", gt)
+    gt = re.sub(rf"\s+", r" ", gt)
     gt = re.sub(f" ?([{PUNCS}])", r"\1", gt)
     gt = gt.lstrip(" ")
     return gt

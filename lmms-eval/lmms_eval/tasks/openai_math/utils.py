@@ -1,9 +1,12 @@
 import os
 import re
+import signal
 from collections import Counter
 from typing import Dict, List, Optional
 
 import datasets
+
+from lmms_eval.utils import eval_logger
 
 if os.getenv("PROMPTSTEP") is not None:
     QUERY_TEMPLATE = "{Question}\n\nThink for up to " + os.getenv("PROMPTSTEP") + " steps."
@@ -124,6 +127,7 @@ def extract_answer_idx(sampler, options: List[str], attempt: str):
 
 
 import time
+from typing import Any
 
 import openai
 from openai import OpenAI
@@ -260,7 +264,7 @@ def process_results(doc: dict, results: List[str]) -> Dict[str, int]:
         sampler = ChatCompletionSampler(model="gpt-4o-mini")
     else:
         print(f"Unknown processor: {os.getenv('PROCESSOR')}; set 'PROCESSOR=gpt-4o-mini' and 'OPENAI_API_KEY=YOUR_KEY' for best results.")
-        raise ValueError("MATH requires PROCESSOR atm. AIME is fine without it.")
+        raise ValueError(f"MATH requires PROCESSOR atm. AIME is fine without it.")
         sampler = None
 
     if isinstance(doc["answer"], str) and doc["answer"].isdigit():

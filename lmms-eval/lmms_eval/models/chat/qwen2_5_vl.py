@@ -1,18 +1,14 @@
 import time
-from typing import List
+from typing import List, Optional, Tuple, Union
 
+import numpy as np
 from loguru import logger as eval_logger
+from PIL import Image
 from tqdm import tqdm
-
-try:
-    import decord
-except ImportError:
-    decord = None
 
 from lmms_eval import utils
 from lmms_eval.api.instance import Instance
 from lmms_eval.api.registry import register_model
-from lmms_eval.imports import optional_import
 from lmms_eval.models.model_utils.gen_metrics import log_metrics
 from lmms_eval.models.model_utils.reasoning_model_utils import (
     parse_reasoning_model_answer,
@@ -20,8 +16,9 @@ from lmms_eval.models.model_utils.reasoning_model_utils import (
 from lmms_eval.models.simple.qwen2_5_vl import Qwen2_5_VL as Qwen2_5_VLSimple
 from lmms_eval.protocol import ChatMessages
 
-process_vision_info, _has_qwen_vl = optional_import("qwen_vl_utils", "process_vision_info")
-if not _has_qwen_vl:
+try:
+    from qwen_vl_utils import process_vision_info
+except ImportError:
     eval_logger.warning("Failed to import qwen_vl_utils; Please install it via `pip install qwen-vl-utils`")
 
 
@@ -39,20 +36,15 @@ class Qwen2_5_VL(Qwen2_5_VLSimple):
         # we group requests by their generation_kwargs,
         # so that we don't try to execute e.g. greedy sampling and temp=0.8 sampling
         # in the same batch.
-        re_ords = utils.Collator(
-            [reg.args for reg in requests],
-            _collate,
-            group_fn=lambda x: x[2],
-            grouping=True,
-        )
+        re_ords = utils.Collator([reg.args for reg in requests], _collate, group_fn=lambda x: x[2], grouping=True)
         chunks = re_ords.get_batched(n=self.batch_size, batch_fn=None)
         num_iters = len(requests) // self.batch_size if len(requests) % self.batch_size == 0 else len(requests) // self.batch_size + 1
         pbar = tqdm(total=num_iters, disable=(self.rank != 0), desc="Model Responding")
-        total_elapsed_time = 0
+        e2e_latency = 0
         total_tokens = 0
         for chunk in chunks:
             ctx, doc_to_messages, all_gen_kwargs, doc_id, task, split = zip(*chunk)
-            chat_messages = [doc_to_messages[idx](self.task_dict[task][split][ids]) for idx, (ids, task, split) in enumerate(zip(doc_id, task, split))]
+            chat_messages = [doc_to_messages[0](self.task_dict[task][split][ids]) for ids, task, split in zip(doc_id, task, split)]
             chat_messages: List[ChatMessages] = [ChatMessages(**{"messages": message}) for message in chat_messages]
             visuals = []
             videos = []
@@ -65,44 +57,17 @@ class Qwen2_5_VL(Qwen2_5_VLSimple):
             gen_kwargs = all_gen_kwargs[0]
 
             # Apply chat template
-            video_kwargs = {
-                "max_pixels": self.max_pixels,
-                "min_pixels": self.min_pixels,
-            }
-            if self.fps is not None:
-                video_kwargs["fps"] = self.fps
-            else:
-                # Probe videos to get frame count and set nframes = min(max_num_frames, total_frames)
-                # This avoids the error when video has fewer frames than max_num_frames
-                if videos and decord is not None:
-                    try:
-                        video_path = videos[0]  # Assume batch size 1 for videos
-                        vr = decord.VideoReader(video_path)
-                        video_total_frames = len(vr)
-                        nframes = min(self.max_num_frames, video_total_frames)
-                        # qwen_vl_utils requires nframes to be a multiple of 2 (FRAME_FACTOR)
-                        # and rounds using round_by_factor, so we need to floor to even number
-                        # to avoid rounding up past total_frames
-                        nframes = (nframes // 2) * 2  # Floor to nearest even number
-                        nframes = max(2, nframes)  # At least 2 frames
-                        video_kwargs["nframes"] = nframes
-                    except Exception as e:
-                        eval_logger.warning(f"Failed to probe video {videos[0]}: {e}, using default nframes")
-                        video_kwargs["nframes"] = self.max_num_frames
-                else:
-                    video_kwargs["nframes"] = self.max_num_frames
-            batched_messages = [chat_message.to_hf_messages(video_kwargs=video_kwargs) for chat_message in chat_messages]
-            texts = self.processor.apply_chat_template(batched_messages, tokenize=False, add_generation_prompt=True)
+            batched_messages = [chat_message.to_hf_messages() for chat_message in chat_messages]
+            texts = [self.processor.apply_chat_template(msg, tokenize=False, add_generation_prompt=True) for msg in batched_messages]
             image_inputs, video_inputs = process_vision_info(batched_messages)
-            padding_side = "left" if self.batch_size > 1 else "right"
-            inputs = self.processor(
-                text=texts,
-                images=image_inputs,
-                videos=video_inputs,
-                padding=True,
-                padding_side=padding_side,
-                return_tensors="pt",
-            )
+            if video_inputs is not None:
+                total_frames = video_inputs[0].shape[0]
+                indices = np.linspace(0, total_frames - 1, self.max_num_frames, dtype=int)
+                # Append the last frame index if not already included
+                if total_frames - 1 not in indices:
+                    indices = np.append(indices, total_frames - 1)
+                video_inputs[0] = video_inputs[0][indices]
+            inputs = self.processor(text=texts, images=image_inputs, videos=video_inputs, padding=True, return_tensors="pt")
 
             if self.device_map == "auto":
                 inputs = inputs.to("cuda")
@@ -144,34 +109,30 @@ class Qwen2_5_VL(Qwen2_5_VLSimple):
             end_time = time.time()
 
             generated_ids_trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, cont)]
-            answers = self.processor.batch_decode(
-                generated_ids_trimmed,
-                skip_special_tokens=True,
-                clean_up_tokenization_spaces=False,
-            )
+            answers = self.processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)
 
             # Calculate timing metrics for batch
-            total_elapsed_time += end_time - start_time
+            e2e_latency += end_time - start_time
             total_tokens += sum(len(ids) for ids in generated_ids_trimmed)
 
             for ans, context in zip(answers, texts):
                 clean_ans = parse_reasoning_model_answer(ans)
                 res.append(clean_ans)
                 self.cache_hook.add_partial("generate_until", (context, gen_kwargs), clean_ans)
+                pbar.update(1)
 
                 eval_logger.debug(f"Question: {context}")
                 eval_logger.debug(f"Model Raw Response: {ans}")
                 eval_logger.debug(f"Model Clean Response: {clean_ans}")
             # reorder this group of results back to original unsorted form
-            pbar.update(1)
         res = re_ords.get_original(res)
 
         # Calculate average speed
-        avg_speed = total_tokens / total_elapsed_time if total_elapsed_time > 0 else 0
+        avg_speed = total_tokens / e2e_latency if e2e_latency > 0 else 0
         # Log metrics
         metric_dict = {
-            "total_gen_tokens": total_tokens,
-            "total_elapsed_time": total_elapsed_time,
+            "total_tokens": total_tokens,
+            "e2e_latency": e2e_latency,
             "avg_speed": avg_speed,
             "additional_metrics": {
                 "rank": self.rank,

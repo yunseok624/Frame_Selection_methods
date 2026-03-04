@@ -1,14 +1,18 @@
+import datetime
+import json
 import os
 import re
 import sys
-from functools import partial
+from collections import defaultdict
 from pathlib import Path
+from typing import Dict, List, Optional, Union
 
 import cv2
-import datasets
 import numpy as np
 import yaml
 from loguru import logger as eval_logger
+
+from lmms_eval.tasks._task_utils.file_utils import generate_submission_file
 
 VIDEO_TYPE = ["short", "medium", "long"]
 CATEGORIES = ["Knowledge", "Film & Television", "Sports Competition", "Artistic Performance", "Life Record", "Multilingual"]
@@ -73,10 +77,11 @@ replace_prompt = " Please answer yes or no."
 
 #     config = yaml.safe_load("".join(safe_data))
 
-hf_home = os.getenv("HF_HOME", "~/.cache/huggingface/")
+# hf_home = os.getenv("HF_HOME", "~/.cache/huggingface/")
 # cache_dir = os.path.join(hf_home, cache_dir)
 # base_cache_dir = config["dataset_kwargs"]["cache_dir"]
-base_cache_dir = os.path.expanduser(hf_home)
+# base_cache_dir = os.path.expanduser(hf_home)
+base_cache_dir = './datasets/'
 with open(Path(__file__).parent / "videomme.yaml", "r") as f:
     raw_data = f.readlines()
     safe_data = []
@@ -128,13 +133,6 @@ def extract_subtitles(video_path, subtitle_path):
     return subtitle_frames, total_frame
 
 
-def videmme_process_docs_base(dataset: datasets.Dataset, type: str) -> datasets.Dataset:
-    return dataset.filter(lambda x: x["duration"] == type)
-
-
-videomme_process_docs_long = partial(videmme_process_docs_base, type="long")
-
-
 def videomme_doc_to_visual(doc):
     cache_dir = os.path.join(base_cache_dir, cache_name)
     video_path = doc["videoID"] + ".mp4"
@@ -151,30 +149,12 @@ def videomme_doc_to_visual(doc):
 
 
 def videomme_doc_to_text(doc, lmms_eval_specific_kwargs=None):
-
-    if "format" in lmms_eval_specific_kwargs and lmms_eval_specific_kwargs["format"] == "qwen3_vl":
-        return videomme_doc_to_text_qwen3vl(doc, lmms_eval_specific_kwargs)
-
     option_prompt = "Select the best answer to the following multiple-choice question based on the video and the subtitles. Respond with only the letter (A, B, C, or D) of the correct option."
     question = doc["question"]
     option = "\n".join([f"{opt}" for i, opt in enumerate(doc["options"])])
     question = question + "\n" + option
     post_prompt = lmms_eval_specific_kwargs["post_prompt"] if "post_prompt" in lmms_eval_specific_kwargs else "The best answer is:"
     full_prompt = option_prompt + "\n" + question + "\n" + post_prompt
-    return full_prompt
-
-
-def videomme_doc_to_text_qwen3vl(doc, lmms_eval_specific_kwargs=None):
-    """
-    Adapted from: https://github.com/open-compass/VLMEvalKit/blob/main/vlmeval/vlm/qwen3_vl/prompt.py#L93
-    """
-    pre_prompt = lmms_eval_specific_kwargs.get("pre_prompt", "")
-    post_prompt = lmms_eval_specific_kwargs.get("post_prompt", "")
-
-    question = doc["question"]
-    option = "\n".join([f"{opt}" for i, opt in enumerate(doc["options"])])
-
-    full_prompt = f"{pre_prompt}{question}\nOptions:\n{option}\n{post_prompt}"
     return full_prompt
 
 
@@ -216,11 +196,16 @@ def videomme_doc_to_text_subtitle(doc, lmms_eval_specific_kwargs=None):
                 subtitle_text = "\n".join(textlist)
         else:
             if "frame_num" in lmms_eval_specific_kwargs:
-                frame_num = lmms_eval_specific_kwargs["frame_num"]
+                # frame_num = lmms_eval_specific_kwargs["frame_num"]
+                frame_num = doc['frame_num']
                 subtitle_by_frame, total_frame = extract_subtitles(video_path, subtitle_path)
                 if frame_num == -1:
                     frame_num = total_frame
-                uniform_sampled_frames = np.linspace(0, total_frame - 1, frame_num, dtype=int).tolist()
+                if doc['use_topk']:
+                    uniform_sampled_frames = doc['frame_idx'][:frame_num]
+                    uniform_sampled_frames = sorted(uniform_sampled_frames)
+                else:
+                    uniform_sampled_frames = np.linspace(0, total_frame - 1, frame_num, dtype=int).tolist()
 
                 subtitle_by_frame_idx = []
                 for frame_idx in uniform_sampled_frames:
@@ -240,16 +225,12 @@ def videomme_doc_to_text_subtitle(doc, lmms_eval_specific_kwargs=None):
                 subtitle_text = "\n".join(textlist)
         subtitle = subtitle_text
 
-    if "format" in lmms_eval_specific_kwargs and lmms_eval_specific_kwargs["format"] == "qwen3_vl":
-        prompt = videomme_doc_to_text_qwen3vl(doc, lmms_eval_specific_kwargs)
-        full_prompt = subtitles_prompt + subtitle + "\n" + prompt
-        return full_prompt
-
     option_prompt = "Select the best answer to the following multiple-choice question based on the video and the subtitles. Respond with only the letter (A, B, C, or D) of the correct option."
     question = doc["question"]
     option = "\n".join([f"{opt}" for i, opt in enumerate(doc["options"])])
     question = question + "\n" + option
     full_prompt = subtitles_prompt + subtitle + "\n" + option_prompt + "\n" + question + "\n" + "The best answer is:"
+    # full_prompt = subtitles_prompt + subtitle + "\n" + option_prompt + "\n" + question + "\n" + "Answer with the option's letter from the given choices directly."
     return full_prompt
 
 
@@ -294,27 +275,15 @@ def videomme_process_results(doc, results):
     """
     pred = results[0]
     pred_ans = extract_characters_regex(pred)
-    gt_ans = doc["answer"]
+    # gt_ans = doc["answer"].lower().strip().replace(".", "")
 
     category = doc["domain"]
     sub_category = doc["sub_category"]
     task_category = doc["task_type"]
-    # score: 0/1 correctness for stderr calculation
-    # videoID: for clustered stderr (questions from same video are correlated)
-    score = 1.0 if pred_ans.lower() == gt_ans.lower() else 0.0
-    data_dict = {
-        "question_id": doc["question_id"],
-        "duration": doc["duration"],
-        "category": category,
-        "sub_category": sub_category,
-        "task_category": task_category,
-        "pred_answer": pred_ans,
-        "answer": gt_ans,
-        "score": score,
-        "videoID": doc["videoID"],
-    }
+    data_dict = {"question_id": doc["question_id"], "duration": doc["duration"], "category": category, "sub_category": sub_category, "task_category": task_category, "pred_answer": pred_ans, "answer": doc["answer"]}
 
-    return {"videomme_perception_score": data_dict}
+    # return {f"videomme_percetion_score": data_dict for metric in matrices}
+    return {f"videomme_percetion_score": data_dict}
 
 
 def videomme_aggregate_results(results):

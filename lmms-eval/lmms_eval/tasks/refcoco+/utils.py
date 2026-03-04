@@ -1,5 +1,5 @@
 from PIL import ImageDraw
-from pycocoevalcap.eval import Bleu, Cider, COCOEvalCap, Meteor, Rouge
+from pycocoevalcap.eval import Bleu, Cider, COCOEvalCap, Meteor, Rouge, Spice
 from pycocoevalcap.tokenizer.ptbtokenizer import PTBTokenizer
 from pycocotools.coco import COCO
 

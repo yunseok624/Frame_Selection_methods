@@ -1,3 +1,6 @@
+import base64
+import uuid
+from io import BytesIO
 from typing import List, Optional, Tuple, Union
 
 import numpy as np
@@ -8,6 +11,8 @@ from loguru import logger as eval_logger
 from PIL import Image
 from tqdm import tqdm
 from transformers import (
+    AutoImageProcessor,
+    AutoModel,
     AutoModelForCausalLM,
     AutoProcessor,
 )

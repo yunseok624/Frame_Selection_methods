@@ -17,6 +17,7 @@ from lmms_eval import utils
 from lmms_eval.api.instance import Instance
 from lmms_eval.api.model import lmms
 from lmms_eval.api.registry import register_model
+from lmms_eval.utils import stop_sequences_criteria
 
 warnings.filterwarnings("ignore")
 

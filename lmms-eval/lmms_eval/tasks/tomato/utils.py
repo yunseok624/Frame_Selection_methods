@@ -1,4 +1,5 @@
 import base64
+import datetime
 import os
 import random
 import re
@@ -11,9 +12,12 @@ import numpy as np
 import yaml
 from loguru import logger as eval_logger
 from openai import AzureOpenAI, OpenAI
+from PIL import Image
 
 random.seed(42)
 
+
+from lmms_eval.tasks._task_utils.file_utils import generate_submission_file
 
 dir_name = os.path.dirname(os.path.abspath(__file__))
 

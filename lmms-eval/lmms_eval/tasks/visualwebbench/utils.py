@@ -3,9 +3,12 @@ import re
 import sys
 
 import numpy as np
+import torch
 from rouge import Rouge
+from torchvision.ops import box_iou
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from loguru import logger as eval_logger
 from prompts import DEFAULT_PROMPTS
 
 

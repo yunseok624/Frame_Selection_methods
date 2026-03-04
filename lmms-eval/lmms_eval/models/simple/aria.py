@@ -3,6 +3,7 @@ from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import PIL
+import requests
 import torch
 from accelerate import Accelerator, DistributedType
 from accelerate.state import AcceleratorState

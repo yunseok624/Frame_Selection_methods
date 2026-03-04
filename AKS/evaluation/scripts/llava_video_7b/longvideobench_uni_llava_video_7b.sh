@@ -1,4 +1,5 @@
 score_type=longvideobench_uni
+frame_num=64
 
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --num_processes 8 --main_process_port 12345 -m lmms_eval\
     --model llava_vid \
@@ -7,4 +8,4 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --num_processes 8 --main_
     --batch_size 1 \
     --log_samples \
     --log_samples_suffix llavavid_7b_qwen_lvb_v \
-    --output_path ./results/${score_type}
+    --output_path ./results/${score_type}_${frame_num}

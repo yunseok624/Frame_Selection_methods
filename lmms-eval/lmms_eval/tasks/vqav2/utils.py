@@ -1,5 +1,7 @@
 import datetime
 import json
+import os
+import re
 import statistics
 
 from loguru import logger as eval_logger
@@ -27,12 +29,14 @@ def vqav2_process_results(doc, result):
         resAns = resAns.replace("\t", " ")
         resAns = resAns.strip()
         gtAcc = []
+        gtAnswers = [ans["answer"] for ans in doc["answers"]]
 
-        for ansDic in doc["answers"]:
-            ansDic["answer"] = eval_ai_processor.process_punctuation(ansDic["answer"])
-            ansDic["answer"] = eval_ai_processor.process_digit_article(ansDic["answer"])
-        resAns = eval_ai_processor.process_punctuation(resAns)
-        resAns = eval_ai_processor.process_digit_article(resAns)
+        if len(set(gtAnswers)) > 1:
+            for ansDic in doc["answers"]:
+                ansDic["answer"] = eval_ai_processor.process_punctuation(ansDic["answer"])
+                ansDic["answer"] = eval_ai_processor.process_digit_article(ansDic["answer"])
+            resAns = eval_ai_processor.process_punctuation(resAns)
+            resAns = eval_ai_processor.process_digit_article(resAns)
 
         for gtAnsDatum in doc["answers"]:
             otherGTAns = [item for item in doc["answers"] if item != gtAnsDatum]

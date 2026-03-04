@@ -1,6 +1,8 @@
+import copy
 import logging
+import math
 from datetime import timedelta
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import torch
@@ -17,6 +19,8 @@ from lmms_eval.api.registry import register_model
 from lmms_eval.models.model_utils.load_video import read_video_pyav
 
 eval_logger = logging.getLogger("lmms-eval")
+import os
+import sys
 
 try:
     from oryx.constants import (

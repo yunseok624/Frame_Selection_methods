@@ -11,6 +11,7 @@ import json
 import sys
 
 sys.path.append("./")
+import importlib
 import os
 import re
 import zipfile
@@ -235,7 +236,7 @@ def get_tl_dict_values(detection, withTranscription=False, withConfidence=False,
     if isinstance(detection, dict) == False:
         raise Exception("Incorrect format. Object has to be a dictionary")
 
-    if "points" not in detection:
+    if not "points" in detection:
         raise Exception("Incorrect format. Object has no points key)")
 
     if isinstance(detection["points"], list) == False:
@@ -269,7 +270,7 @@ def get_tl_dict_values(detection, withTranscription=False, withConfidence=False,
         validate_clockwise_points(points)
 
     if withConfidence:
-        if "confidence" not in detection:
+        if not "confidence" in detection:
             raise Exception("Incorrect format. No confidence key)")
 
         if isinstance(detection["confidence"], (int, float)) == False:
@@ -281,7 +282,7 @@ def get_tl_dict_values(detection, withTranscription=False, withConfidence=False,
         confidence = detection["confidence"]
 
     if withTranscription:
-        if "transcription" not in detection:
+        if not "transcription" in detection:
             raise Exception("Incorrect format. No transcription key)")
 
         if isinstance(detection["transcription"], str) == False:

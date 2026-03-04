@@ -1,6 +1,7 @@
 import re
 from datetime import timedelta
-from typing import List, Optional, Tuple, Union
+from multiprocessing import context
+from typing import List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import torch
@@ -11,9 +12,11 @@ from PIL import Image
 from tqdm import tqdm
 from transformers import AutoModel, AutoTokenizer
 
+from lmms_eval import utils
 from lmms_eval.api.instance import Instance
 from lmms_eval.api.model import lmms
 from lmms_eval.api.registry import register_model
+from lmms_eval.utils import stop_sequences_criteria
 
 pattern = re.compile(r"[A-Z]")
 

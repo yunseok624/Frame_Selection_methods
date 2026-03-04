@@ -1,3 +1,5 @@
+import os
+
 import yaml
 
 # splits = ["train", "val", "testA", "testB"]

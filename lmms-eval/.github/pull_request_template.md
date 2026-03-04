@@ -1,31 +1,16 @@
-## Description
+Before you open a pull-request, please check if a similar issue already exists or has been closed before.
 
-<!-- Briefly describe what this PR does and why. Focus on the problem it solves. -->
+### When you open a pull-request, please be sure to include the following
 
-## Type of Change
+- [ ] A descriptive title: [xxx] XXXX
+- [ ] A detailed description
 
-- [ ] Bug fix (non-breaking change that fixes an issue)
-- [ ] New feature (non-breaking change that adds functionality)
-- [ ] New benchmark/task
-- [ ] New model integration
-- [ ] Breaking change (fix or feature that would cause existing functionality to not work as expected)
-- [ ] Documentation update
-- [ ] Refactoring (no functional changes)
+If you meet the lint warnings, you can use following scripts to reformat code.
 
-## Changes Made
+```sh
+pip install pre-commit
+pre-commit install
+pre-commit run --all-files
+```
 
-<!-- List the key changes. Keep it high-level; the diff tells the details. -->
-
--
-
-## Testing
-
-<!-- Describe how you tested your changes. -->
-
-- [ ] Tested locally with: `python -m lmms_eval --model <model> --tasks <task> --limit 8`
-- [ ] Ran pre-commit: `pre-commit run --all-files`
-- [ ] Added/updated tests (if applicable)
-
-## Additional Notes
-
-<!-- Any context, screenshots, or related issues. -->
+Thank you for your contributions!

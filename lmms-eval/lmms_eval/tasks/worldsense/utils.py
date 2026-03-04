@@ -1,3 +1,4 @@
+import datetime
 import os
 from collections import defaultdict
 from pathlib import Path
@@ -6,6 +7,9 @@ import cv2
 import numpy as np
 import yaml
 from loguru import logger as eval_logger
+from PIL import Image
+
+from lmms_eval.tasks._task_utils.file_utils import generate_submission_file
 
 dir_name = os.path.dirname(os.path.abspath(__file__))
 
