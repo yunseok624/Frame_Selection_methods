@@ -23,14 +23,14 @@ from llava.mm_utils import (
 )
 from llava.model.builder import load_pretrained_model
 from llava.model.language_model.llava_llama import LlavaConfig
-# from llava.model.language_model.llava_qwen import LlavaQwenConfig
+from llava.model.language_model.llava_qwen import LlavaQwenConfig
 
 # eval_logger = logging.getLogger("lmms-eval")
 # import sys;sys.path.append("llava-video")
 from loguru import logger as eval_logger
 from PIL import Image
 from tqdm import tqdm
-from transformers import AutoConfig, AutoModelForCausalLM
+from transformers import AutoConfig, AutoModelForCausalLM, BitsAndBytesConfig
 
 from lmms_eval.api.instance import Instance
 from lmms_eval.api.model import lmms
@@ -67,7 +67,7 @@ import pickle
 
 
 AutoConfig.register("llava_llama", LlavaConfig)
-# AutoConfig.register("llava_qwen", LlavaQwenConfig)
+AutoConfig.register("llava_qwen", LlavaQwenConfig)
 
 
 @register_model("llava_vid")
@@ -147,6 +147,16 @@ class LlavaVid(lmms):
         # self.add_faster_video = add_faster_video
         # self.faster_token_stride = faster_token_stride
         self.torch_dtype = torch_dtype
+
+        quantization_config = None
+        if load_8bit or load_4bit:
+            quantization_config = BitsAndBytesConfig(
+                load_in_8bit=load_8bit,
+                load_in_4bit=load_4bit,
+            )
+            load_8bit = False
+            load_4bit = False
+
         if self.overwrite == True:
             overwrite_config = {}
             # overwrite_config["mm_resampler_type"] = self.mm_resampler_type
@@ -175,10 +185,10 @@ class LlavaVid(lmms):
                     overwrite_config["tokenizer_model_max_length"] = 4096 * scaling_factor
 
             self._tokenizer, self._model, self._image_processor, self._max_length = load_pretrained_model(
-                pretrained, None, self.model_name, device_map=self.device_map, torch_dtype=self.torch_dtype, overwrite_config=overwrite_config, attn_implementation=attn_implementation, load_8bit=load_8bit, load_4bit=load_4bit
+                pretrained, None, self.model_name, device_map=self.device_map, torch_dtype=self.torch_dtype, overwrite_config=overwrite_config, attn_implementation=attn_implementation, load_8bit=load_8bit, load_4bit=load_4bit, quantization_config=quantization_config
             )
         else:
-            self._tokenizer, self._model, self._image_processor, self._max_length = load_pretrained_model(pretrained, None, self.model_name, device_map=self.device_map, torch_dtype=self.torch_dtype, attn_implementation=attn_implementation, load_8bit=load_8bit, load_4bit=load_4bit)
+            self._tokenizer, self._model, self._image_processor, self._max_length = load_pretrained_model(pretrained, None, self.model_name, device_map=self.device_map, torch_dtype=self.torch_dtype, attn_implementation=attn_implementation, load_8bit=load_8bit, load_4bit=load_4bit, quantization_config=quantization_config)
 
         self._config = self._model.config
         # print(attn_implementation)
@@ -226,7 +236,8 @@ class LlavaVid(lmms):
             self._word_size = 1
         else:
             eval_logger.info(f"Using single device: {self._device}")
-            self.model.to(self._device)
+            if quantization_config is None:
+                self.model.to(self._device)
             self._rank = 0
             self._world_size = 1
 
