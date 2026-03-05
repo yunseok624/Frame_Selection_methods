@@ -1,7 +1,11 @@
+import datetime
+import json
 import os
 from collections import defaultdict
 
 from loguru import logger as eval_logger
+
+from lmms_eval.tasks._task_utils.file_utils import generate_submission_file
 
 dir_name = os.path.dirname(os.path.abspath(__file__))
 
@@ -84,7 +88,7 @@ def mme_process_results(doc, results):
     assert pred_ans in ["yes", "no", "other"]
     score = 1.0 if pred_ans == gt_ans else 0.0
     category = doc["category"]
-    key_name = "mme_perception_score" if category in eval_type_dict["Perception"] else "mme_cognition_score"
+    key_name = "mme_percetion_score" if category in eval_type_dict["Perception"] else "mme_cognition_score"
     # Note: the key name here is very important. It decides which aggregation function will receive the results
     # We note down the question id/category to help us aggregate the results later
     return {key_name: {"question_id": doc["question_id"], "category": category, "score": score}}

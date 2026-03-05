@@ -1,8 +1,12 @@
+import json
+import os
 from pathlib import Path
 
 import pandas as pd
 import yaml
+from loguru import logger as eval_logger
 
+from lmms_eval.tasks._task_utils.file_utils import generate_submission_file
 from lmms_eval.tasks.mathvista.mathvista_evals import MathVistaEvaluator
 
 with open(Path(__file__).parent / "mathvista.yaml", "r") as f:
@@ -15,8 +19,7 @@ with open(Path(__file__).parent / "mathvista.yaml", "r") as f:
 
     config = yaml.safe_load("".join(safe_data))
 
-
-mathvista_evaluator = MathVistaEvaluator()
+mathvista_evaluator = MathVistaEvaluator(api_key=os.getenv("OPENAI_API_KEY", "YOUR_API_KEY"), gpt_model=config["metadata"]["gpt_eval_model_name"])
 
 
 def mathvista_doc_to_visual(doc):
@@ -76,7 +79,7 @@ def mathvista_process_results(doc, results):
     }
 
     return {
-        "llm_as_judge_eval": result,
+        "gpt_eval_score": result,
         "submission": result,
     }
 
@@ -115,6 +118,10 @@ def mathvista_aggregate_results(results, args, *, calculate_gain=False, random_s
                     gain = round(float(scores[key][sub_key]["accuracy"]) - float(random_scores[key][sub_key]["accuracy"]), 2)
                     scores[key][sub_key]["acc_gain"] = gain
 
+    path = generate_submission_file(f"mathvista_{split_flag}_scores.json", args)
+    with open(path, "w") as f:
+        json.dump(results_dict, f, indent=4)
+    eval_logger.info(f"Saved results to {path}")
     if scores["average"]["accuracy"] == 0:
         return None
     return scores["average"]["accuracy"]

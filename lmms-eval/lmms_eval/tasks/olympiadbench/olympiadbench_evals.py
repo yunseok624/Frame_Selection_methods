@@ -7,7 +7,7 @@ from loguru import logger as eval_logger
 try:
     from sympy import Eq, Pow, simplify, sympify
     from sympy.parsing.latex import parse_latex
-except ImportError:
+except ImportError as e:
     eval_logger.debug("Please install sympy package by running 'pip install sympy' if you want to use OlympiadBenchEvaluator.")
 
 # how to use

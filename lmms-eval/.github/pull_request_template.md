@@ -1,35 +1,8 @@
-## Summary
-<!-- Max 3 bullets. -->
-- 
-- 
-- 
+Before you open a pull-request, please check if a similar issue already exists or has been closed before.
 
-## In scope
-<!-- Explicitly list what this PR changes. -->
-- 
+### When you open a pull-request, please be sure to include the following
 
-## Out of scope
-<!-- Explicitly list what this PR does NOT change. -->
-- 
+- [ ] A descriptive title: [xxx] XXXX
+- [ ] A detailed description
 
-## Validation
-<!--
-Max 3 bullets.
-Use this format:
-`<command>` | sample size: `N=<...>` | key metrics: `<...>` | result: `pass/fail`
-If you ran tests/benchmarks with metrics, include concrete numbers.
--->
-- 
-
-## Risk / Compatibility
-<!-- 1-2 bullets. Note breaking changes, behavior changes, or migration impact. -->
-- 
-
-## Type of Change
-- [ ] Bug fix (non-breaking change)
-- [ ] New feature
-- [ ] New benchmark/task
-- [ ] New model integration
-- [ ] Breaking change
-- [ ] Documentation update
-- [ ] Refactoring (no functional changes)
+Thank you for your contributions!

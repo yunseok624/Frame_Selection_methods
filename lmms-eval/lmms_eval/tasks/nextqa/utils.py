@@ -1,3 +1,4 @@
+import os
 import random
 from pathlib import Path
 
@@ -146,7 +147,7 @@ def nextqa_doc_to_target(doc):
 def remove_stop(sentence):
     sentence.replace("</s>", "")  # video-llava
     words = lemmatize_sentence(sentence)
-    words = [w for w in words if w not in stopwords]
+    words = [w for w in words if not w in stopwords]
     return " ".join(words)
 
 

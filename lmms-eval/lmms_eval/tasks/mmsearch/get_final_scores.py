@@ -1,7 +1,10 @@
 import argparse
 import json
+import os
 
 import datasets
+
+from lmms_eval.tasks.mmsearch.score.result_summary import get_result_summary
 
 task_path_dict = dict(
     end2end="end2end_path",

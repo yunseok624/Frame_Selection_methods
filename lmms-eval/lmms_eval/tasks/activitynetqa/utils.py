@@ -1,12 +1,20 @@
 import ast
+import datetime
+import json
 import os
 import sys
 import time
 from pathlib import Path
 
+import numpy as np
+import openai
 import requests
 import yaml
+from decord import VideoReader, cpu
 from loguru import logger as eval_logger
+from openai import OpenAI
+
+import lmms_eval.tasks._task_utils.file_utils as file_utils
 
 with open(Path(__file__).parent / "_default_template_yaml", "r") as f:
     raw_data = f.readlines()
@@ -20,7 +28,7 @@ with open(Path(__file__).parent / "_default_template_yaml", "r") as f:
 
 NUM_SECONDS_TO_SLEEP = 5
 
-GPT_EVAL_MODEL_NAME = os.getenv("MODEL_VERSION", "gpt-4o-2024-11-20")
+GPT_EVAL_MODEL_NAME = config["metadata"]["gpt_eval_model_name"]
 
 API_TYPE = os.getenv("API_TYPE", "openai")
 
@@ -150,25 +158,19 @@ def get_eval(question, answer, pred, max_tokens: int, retries: int = 5):
 def parse_score(review):
     try:
         # Convert the string representation of a dictionary to an actual dictionary
-        review = "{" + review.split("{")[1].split("}")[0] + "}"
         review_dict = ast.literal_eval(review)
-        # import pdb;pdb.set_trace()
-        score_match = review_dict["score"]
-        score = int(score_match)
-        pred = review_dict["pred"]
-        if "yes" in pred.lower():
-            pred = "yes"
-        elif "no" in pred.lower():
-            pred = "no"
-        # pred = review_dict.get("pred", "no")
-        # score = review_dict.get("score", 0)
-        return [pred, score]
+        pred = review_dict.get("pred", "no")
+        score = review_dict.get("score", 0)
+        return [pred, float(score)]
     except SyntaxError as e:
         eval_logger.error(f"Syntax error parsing the review string: {e}. Review content: {review}")
+        return ["no", 0]
     except ValueError as e:
         eval_logger.error(f"Value error parsing the review string: {e}. Review content: {review}")
+        return ["no", 0]
     except Exception as e:
         eval_logger.error(f"Unexpected error parsing the review string: {e}. Review content: {review}")
+        return ["no", 0]
 
 
 def activitynetqa_process_results(doc, result):
@@ -242,12 +244,11 @@ def activitynetqa_aggregate_score(results, args):
 
     # Iterate over the results to count correctness and sum scores
     for result_dict in results:
-        if "yes" in result_dict["Correctness"].lower():
+        if result_dict["Correctness"] == "yes":
             yes_count += 1
-        elif "no" in result_dict["Correctness"].lower():
+        else:
             no_count += 1
-
-        total_score += int(result_dict["score"])
+        total_score += result_dict["score"]
 
     # Calculate accuracy and average score
     accuracy = yes_count / (yes_count + no_count) if (yes_count + no_count) > 0 else 0
@@ -264,12 +265,11 @@ def activitynetqa_aggregate_accuracy(results, args):
 
     # Iterate over the results to count correctness and sum scores
     for result_dict in results:
-        if "yes" in result_dict["Correctness"].lower():
+        if result_dict["Correctness"] == "yes":
             yes_count += 1
-        elif "no" in result_dict["Correctness"].lower():
+        else:
             no_count += 1
-
-        total_score += int(result_dict["score"])
+        total_score += result_dict["score"]
 
     # Calculate accuracy and average score
     accuracy = yes_count / (yes_count + no_count) if (yes_count + no_count) > 0 else 0

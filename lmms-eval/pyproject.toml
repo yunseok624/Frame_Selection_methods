@@ -2,40 +2,40 @@
 line-length = 240
 
 [build-system]
-requires = ["setuptools>=42", "wheel"]
+requires = ["setuptools>=42", "wheel", "setuptools_scm[tomli]>=6.3"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "lmms_eval"
-version = "0.7.0"
+version = "0.2.3.dev0"
 authors = [
     { name = "LMMMs-Lab Evaluation Team", email = "lmms-lab@outlook.com" },
 ]
 description = "A framework for evaluating large multi-modality language models"
 readme = "README.md"
-license = "MIT"
-license-files = ["LICENSE"]
 classifiers = [
     "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.8"
+license = { text = "MIT" }
 dependencies = [
     "accelerate>=0.29.1",
-    "black>=24.1.0",
-    "isort>=5.13.2",
-    "datasets>=2.19.0",
+    "black==24.1.0",
+    "isort==5.13.2",
+    "datasets==2.16.1",
     "evaluate>=0.4.0",
-    "httpx>=0.23.3",
+    "httpx==0.23.3",
     "jsonlines",
-    "aiohttp",
     "numexpr",
-    "numpy>=1.26.4",
+    "numpy==1.26.4",
     "peft>=0.2.0",
     "pybind11>=2.6.2",
     "pytablewriter",
     "sacrebleu>=1.5.0",
     "scikit-learn>=0.24.1",
+    "sqlitedict==2.1.0",
     "torch>=2.1.0", # to enable sdpa mode for running 34B model on one 80GB GPU
     "torchvision>=0.16.0",
     "timm",
@@ -43,10 +43,10 @@ dependencies = [
     "ftfy",
     "openai",
     "opencv-python-headless",
-    "av<16.0.0",
+    "av",
     "hf_transfer",
     "nltk",
-    "sentencepiece",
+    "sentencepiece==0.1.99",
     "yt-dlp",
     "pycocoevalcap",
     "tqdm-multiprocess",
@@ -56,46 +56,23 @@ dependencies = [
     "pillow",
     "pyyaml",
     "sympy",
-    "latex2sympy2",
     "mpmath",
     "Jinja2",
     "openpyxl",
     "loguru",
     "hf_transfer",
-    "tenacity>=8.3.0",
+    "tenacity==8.3.0",
     "wandb>=0.16.0",
     "tiktoken",
     "pre-commit",
     "pydantic",
     "packaging",
+    "decord",
     "zss",
-    "protobuf",
-    "sentence_transformers",
-    "python-dotenv",
-    "qwen-vl-utils>=0.0.14",
-    "math-verify",
+    "protobuf==3.20",
 ]
 
 [project.optional-dependencies]
-core = [
-    "lmms_eval[server]",
-    "lmms_eval[audio]",
-    "lmms_eval[metrics]",
-]
-server = [
-    "fastapi",
-    "uvicorn",
-]
-mcp = [
-    "mcp[cli]>=1.20.0",
-]
-audio = [
-    "more-itertools",
-    "editdistance",
-    "zhconv",
-    "librosa",
-    "soundfile"
-]
 metrics = [
     "pywsd",
     "spacy",
@@ -104,11 +81,14 @@ metrics = [
     "capture_metric",
     "Levenshtein",
 ]
+vila = [
+    "s2wrapper@git+https://github.com/bfshi/scaling_on_scales"
+]
 gemini = [
     "google-generativeai",
 ]
 reka = [
-    "httpx>=0.23.3",
+    "httpx==0.23.3",
     "reka-api",
 ]
 qwen = [
@@ -126,33 +106,14 @@ mmsearch = [
     "FlagEmbedding",
     "rouge",
 ]
-prismmbench = [
-    "pdf2image>=1.17.0",
-    "pdfplumber>=0.11.9"
-]
-tui = [
-    "fastapi>=0.100.0",
-    "uvicorn>=0.20.0",
-]
-video = [
-    "decord; platform_system != 'Darwin'",
-    "eva-decord; platform_system == 'Darwin' and python_version < '3.12'",
-]
 all = [
-    "lmms_eval[core]",
-    "lmms_eval[mcp]",
-    "lmms_eval[gemini]",
-    "lmms_eval[reka]",
-    "lmms_eval[qwen]",
-    "lmms_eval[mmsearch]",
-    "lmms_eval[tui]",
-    "lmms_eval[video]",
+    "vila",
+    "gemini",
+    "reka",
+    "metrics",
+    "qwen",
+    "mmsearch"
 ]
-
-[tool.setuptools.package-data]
-"lmms_eval" = ["**/*.yaml", "**/*.yml", "**/*.json", "**/*.txt"]
-"lmms_eval.tui.web.dist" = ["**/*"]
-"lmms_eval.tui.web.dist.assets" = ["**/*"]
 
 [tool.setuptools.packages.find]
 include = ["lmms_eval*"]
@@ -192,30 +153,8 @@ exclude = [
 ]
 
 [project.scripts]
-lmms-eval = "lmms_eval.cli.dispatch:main"
-lmms-eval-mcp = "lmms_eval.mcp:main"
-lmms-eval-ui = "lmms_eval.tui.cli:main"
+lmms-eval = "lmms_eval.__main__:cli_evaluate"
 
 [project.urls]
 Homepage = "https://lmms-lab.github.io"
 Repository = "https://github.com/EvolvingLMMs-Lab/lmms-eval"
-
-[dependency-groups]
-dev = [
-    "textual>=7.2.0",
-    "textual-dev>=1.8.0",
-]
-
-[tool.pytest.ini_options]
-testpaths = ["test"]
-python_files = "test_*.py"
-python_classes = "Test*"
-python_functions = "test_*"
-markers = [
-    "gpu: requires GPU hardware (deselect with '-m not gpu')",
-    "api: requires external API keys (deselect with '-m not api')",
-    "slow: slow integration tests (deselect with '-m not slow')",
-]
-filterwarnings = [
-    "ignore::DeprecationWarning",
-]

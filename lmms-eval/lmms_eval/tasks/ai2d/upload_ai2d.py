@@ -27,9 +27,9 @@ _DESCRIPTION = "AI2D is a dataset of illustrative diagrams for research on diagr
 def get_builder_config(VERSION):
     builder_config = [
         datasets.BuilderConfig(
-            name="ai2d",
+            name=f"ai2d",
             version=VERSION,
-            description="ai2d",
+            description=f"ai2d",
         )
     ]
     return builder_config

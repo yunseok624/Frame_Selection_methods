@@ -1,5 +1,4 @@
 import os
-import pickle
 import re
 import subprocess
 from pathlib import Path
@@ -31,14 +30,6 @@ def remove_none_pattern(input_string: str) -> Tuple[str, bool]:
     removed = result != input_string
 
     return result, removed
-
-
-def is_serializable(o: Any) -> bool:
-    try:
-        pickle.dumps(o)
-        return True
-    except (pickle.PickleError, TypeError, AttributeError):
-        return False
 
 
 def _handle_non_serializable(o: Any) -> Union[int, str, list]:

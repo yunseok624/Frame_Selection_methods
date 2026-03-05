@@ -1,13 +1,9 @@
-import os
 import re
 import time
-from pathlib import Path
 
-import yaml
+import requests
 from Levenshtein import distance
 from loguru import logger as eval_logger
-
-from lmms_eval.llm_judge import Request, ServerConfig, get_server
 
 # pids: 799, 681, 615
 shot_examples = [
@@ -147,46 +143,42 @@ Model response: The correct answer is (B) 8/11.
 Extracted answer: B
 """
 
-with open(Path(__file__).parent / "mathvista.yaml", "r") as f:
-    raw_data = f.readlines()
-    safe_data = []
-    for i, line in enumerate(raw_data):
-        # remove function definition since yaml load cannot handle it
-        if "!function" not in line:
-            safe_data.append(line)
-
-    config = yaml.safe_load("".join(safe_data))
-
 
 class MathVistaEvaluator:
-    API_TYPE = os.getenv("API_TYPE", "openai")
-    gpt_model = os.getenv("MODEL_VERSION", "gpt-4o-2024-11-20")
+    API_URL = "https://api.openai.com/v1/chat/completions"
 
-    # Initialize llm_judge server
-    server_config = ServerConfig(model_name=gpt_model, temperature=0.0, max_tokens=256, timeout=60, num_retries=5, retry_delay=10)
-    server = get_server(server_name=API_TYPE, config=server_config)
-
-    def __init__(self, quick_extract=False):
+    def __init__(self, api_key, gpt_model="gpt-3.5-turbo", quick_extract=False):
+        self.api_key = api_key
+        self.gpt_model = gpt_model
         self.quick_extract = quick_extract
 
+    def _post_request(self, payload):
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        response = requests.post(self.API_URL, headers=headers, json=payload, timeout=30)
+        response.raise_for_status()
+        return response.json()
+
     def get_chat_response(self, prompt, temperature=0, max_tokens=256, n=1, patience=5, sleep_time=0):
-        # Create a custom server config for this specific request with different parameters
-        request_config = ServerConfig(model_name=self.gpt_model, temperature=temperature, max_tokens=max_tokens, timeout=60, num_retries=patience, retry_delay=sleep_time)
+        messages = [
+            {"role": "user", "content": prompt},
+        ]
+        payload = {"model": self.gpt_model, "messages": messages, "temperature": temperature, "max_tokens": max_tokens, "n": n}
 
         while patience > 0:
             patience -= 1
             try:
-                # Use the core evaluate method with a Request object for direct text generation
-                request = Request(messages=[{"role": "user", "content": prompt}], config=request_config)
-
-                response = self.server.evaluate(request)
-
-                if response.success:
-                    prediction = response.content.strip()
+                response = self._post_request(payload)
+                if n == 1:
+                    prediction = response["choices"][0]["message"]["content"].strip()
                     if prediction and prediction != "":
                         return prediction
                 else:
-                    eval_logger.error(f"Server evaluation failed: {response.error}")
+                    prediction = [choice["message"]["content"].strip() for choice in response["choices"]]
+                    if prediction and prediction[0] != "":
+                        return prediction
 
             except Exception as e:
                 if "Rate limit" not in str(e):
@@ -198,6 +190,9 @@ class MathVistaEvaluator:
                     new_size = int(len(prompt) * 0.9)
                     new_start = len(prompt) - new_size
                     prompt = prompt[new_start:]
+                    payload["messages"] = [
+                        {"role": "user", "content": prompt},
+                    ]
 
                 if sleep_time > 0:
                     time.sleep(sleep_time)
@@ -260,7 +255,7 @@ class MathVistaEvaluator:
             return extraction
         except Exception as e:
             eval_logger.error(e)
-            eval_logger.error("Error in extracting answer for problem")
+            eval_logger.error(f"Error in extracting answer for problem")
 
         return ""
 
@@ -423,75 +418,75 @@ class MathVistaEvaluator:
         if shot_type == "solution":
             if question_type == "multi_choice":
                 assert answer_type == "text"
-                hint_text = "Hint: Please answer the question and provide the correct option letter, e.g., A, B, C, D, at the end."
+                hint_text = f"Hint: Please answer the question and provide the correct option letter, e.g., A, B, C, D, at the end."
             else:
                 assert answer_type in ["integer", "float", "list"]
                 if answer_type == "integer":
-                    hint_text = "Hint: Please answer the question requiring an integer answer and provide the final value, e.g., 1, 2, 3, at the end."
+                    hint_text = f"Hint: Please answer the question requiring an integer answer and provide the final value, e.g., 1, 2, 3, at the end."
 
                 elif answer_type == "float" and precision == 1:
-                    hint_text = "Hint: Please answer the question requiring a floating-point number with one decimal place and provide the final value, e.g., 1.2, 1.3, 1.4, at the end."
+                    hint_text = f"Hint: Please answer the question requiring a floating-point number with one decimal place and provide the final value, e.g., 1.2, 1.3, 1.4, at the end."
 
                 elif answer_type == "float" and precision == 2:
-                    hint_text = "Hint: Please answer the question requiring a floating-point number with two decimal places and provide the final value, e.g., 1.23, 1.34, 1.45, at the end."
+                    hint_text = f"Hint: Please answer the question requiring a floating-point number with two decimal places and provide the final value, e.g., 1.23, 1.34, 1.45, at the end."
 
                 elif answer_type == "list":
-                    hint_text = "Hint: Please answer the question requiring a Python list as an answer and provide the final list, e.g., [1, 2, 3], [1.2, 1.3, 1.4], at the end."
+                    hint_text = f"Hint: Please answer the question requiring a Python list as an answer and provide the final list, e.g., [1, 2, 3], [1.2, 1.3, 1.4], at the end."
         # step-by-step
         elif shot_type == "format-prompt":
             if question_type == "multi_choice":
                 assert answer_type == "text"
-                hint_text = "Answer with the option's letter from the given choices directly."
+                hint_text = f"Answer with the option's letter from the given choices directly."
             else:
                 if answer_type == "integer":
-                    hint_text = "Answer the question using a single integer number."
+                    hint_text = f"Answer the question using a single integer number."
 
                 elif answer_type == "float" and precision == 1:
-                    hint_text = "Answer the question using a single floating-point number with one decimal place."
+                    hint_text = f"Answer the question using a single floating-point number with one decimal place."
 
                 elif answer_type == "float" and precision == 2:
-                    hint_text = "Answer the question using a single floating-point number with two decimal places."
+                    hint_text = f"Answer the question using a single floating-point number with two decimal places."
 
                 elif answer_type == "list":
-                    hint_text = "Answer the question using a Python list."
+                    hint_text = f"Answer the question using a Python list."
         # step-by-step
         elif shot_type == "step-by-step":
             if question_type == "multi_choice":
                 assert answer_type == "text"
-                hint_text = "Hint: Please answer the question and provide the correct option letter, e.g., A, B, C, D, at the end."
+                hint_text = f"Hint: Please answer the question and provide the correct option letter, e.g., A, B, C, D, at the end."
             else:
                 assert answer_type in ["integer", "float", "list"]
                 if answer_type == "integer":
-                    hint_text = "Hint: Please answer the question requiring an integer answer and provide the final value, e.g., 1, 2, 3, at the end."
+                    hint_text = f"Hint: Please answer the question requiring an integer answer and provide the final value, e.g., 1, 2, 3, at the end."
 
                 elif answer_type == "float" and precision == 1:
-                    hint_text = "Hint: Please answer the question requiring a floating-point number with one decimal place and provide the final value, e.g., 1.2, 1.3, 1.4, at the end."
+                    hint_text = f"Hint: Please answer the question requiring a floating-point number with one decimal place and provide the final value, e.g., 1.2, 1.3, 1.4, at the end."
 
                 elif answer_type == "float" and precision == 2:
-                    hint_text = "Hint: Please answer the question requiring a floating-point number with two decimal places and provide the final value, e.g., 1.23, 1.34, 1.45, at the end."
+                    hint_text = f"Hint: Please answer the question requiring a floating-point number with two decimal places and provide the final value, e.g., 1.23, 1.34, 1.45, at the end."
 
                 elif answer_type == "list":
-                    hint_text = "Hint: Please answer the question requiring a Python list as an answer and provide the final list, e.g., [1, 2, 3], [1.2, 1.3, 1.4], at the end."
+                    hint_text = f"Hint: Please answer the question requiring a Python list as an answer and provide the final list, e.g., [1, 2, 3], [1.2, 1.3, 1.4], at the end."
         # step-by-step
         elif shot_type == "reason-first":
             if question_type == "multi_choice":
                 assert answer_type == "text"
-                hint_text = "First perform reasoning, then finally select the question from the choices in the following format: Answer: xxx."
+                hint_text = f"First perform reasoning, then finally select the question from the choices in the following format: Answer: xxx."
             else:
                 assert answer_type in ["integer", "float", "list"]
                 if answer_type == "integer":
-                    hint_text = "First perform reasoning, then finally answer the question requiring an integer answer and provide the final value, e.g., 1, 2, 3, at the end in the following format: Answer: xxx."
+                    hint_text = f"First perform reasoning, then finally answer the question requiring an integer answer and provide the final value, e.g., 1, 2, 3, at the end in the following format: Answer: xxx."
 
                 elif answer_type == "float" and precision == 1:
                     hint_text = (
-                        "First perform reasoning, then finally answer the question requiring a floating-point number with one decimal place and provide the final value, e.g., 1.2, 1.3, 1.4, at the end in the following format: Answer: xxx."
+                        f"First perform reasoning, then finally answer the question requiring a floating-point number with one decimal place and provide the final value, e.g., 1.2, 1.3, 1.4, at the end in the following format: Answer: xxx."
                     )
 
                 elif answer_type == "float" and precision == 2:
-                    hint_text = "First perform reasoning, then finally answer the question requiring a floating-point number with two decimal places and provide the final value, e.g., 1.23, 1.34, 1.45, at the end in the following format: Answer: xxx."
+                    hint_text = f"First perform reasoning, then finally answer the question requiring a floating-point number with two decimal places and provide the final value, e.g., 1.23, 1.34, 1.45, at the end in the following format: Answer: xxx."
 
                 elif answer_type == "list":
-                    hint_text = "First perform reasoning, then finally answer the question requiring a Python list as an answer and provide the final list, e.g., [1, 2, 3], [1.2, 1.3, 1.4], at the end in the following format: Answer: xxx."
+                    hint_text = f"First perform reasoning, then finally answer the question requiring a Python list as an answer and provide the final list, e.g., [1, 2, 3], [1.2, 1.3, 1.4], at the end in the following format: Answer: xxx."
         elif shot_type == "direct":
             hint_text = ""
         else:

@@ -1,4 +1,5 @@
 import ast
+import datetime
 import json
 import os
 import sys
@@ -7,6 +8,8 @@ from pathlib import Path
 
 import requests
 import yaml
+
+import lmms_eval.tasks._task_utils.file_utils as file_utils
 
 with open(Path(__file__).parent / "_default_template_yaml", "r") as f:
     raw_data = f.readlines()
@@ -21,7 +24,7 @@ with open(Path(__file__).parent / "_default_template_yaml", "r") as f:
 
 NUM_SECONDS_TO_SLEEP = 5
 
-GPT_EVAL_MODEL_NAME = os.getenv("MODEL_VERSION", "gpt-4o-2024-11-20")
+GPT_EVAL_MODEL_NAME = config["metadata"]["gpt_eval_model_name"]
 
 API_TYPE = os.getenv("API_TYPE", "openai")
 
@@ -138,7 +141,7 @@ def get_eval_generic(question, answer, pred, max_tokens: int, retries: int = 5):
             eval_logger.error(f"Unexpected error on attempt {attempt + 1}: {e}")
 
         if "Sorry! We've encountered an issue with repetitive patterns in your prompt. Please try again with a different prompt." in json.loads(response.content)["error"]["message"]:
-            eval_logger.error("Repetitive patterns in prompt. Drop this data.")
+            eval_logger.error(f"Repetitive patterns in prompt. Drop this data.")
             return "", ""
 
         # Handle other unexpected errors

@@ -1,10 +1,9 @@
 import hashlib
 import os
-import pickle
 
 import dill
 
-from lmms_eval.loggers.utils import _handle_non_serializable, is_serializable
+from lmms_eval.loggers.utils import _handle_non_serializable
 from lmms_eval.utils import eval_logger
 
 MODULE_DIR = os.path.dirname(os.path.realpath(__file__))
@@ -44,18 +43,17 @@ def save_to_cache(file_name, obj):
     serializable_obj = []
 
     for item in obj:
+        sub_serializable_obj = []
         for subitem in item:
             if hasattr(subitem, "arguments"):  # we need to handle the arguments specially since doc_to_visual is callable method and not serializable
                 serializable_arguments = tuple(arg if not callable(arg) else None for arg in subitem.arguments)
                 subitem.arguments = serializable_arguments
+            sub_serializable_obj.append(_handle_non_serializable(subitem))
+        serializable_obj.append(sub_serializable_obj)
 
     eval_logger.debug(f"Saving {file_path} to cache...")
-    try:
-        with open(file_path, "wb") as file:
-            file.write(dill.dumps(serializable_obj))
-    except (pickle.PickleError, dill.PicklingError, TypeError, AttributeError):
-        with open(file_path, "wb") as file:
-            file.write(dill.dumps([[subitem if is_serializable(subitem) else _handle_non_serializable(subitem) for subitem in item] for item in obj]))
+    with open(file_path, "wb") as file:
+        file.write(dill.dumps(serializable_obj))
 
 
 # NOTE the "key" param is to allow for flexibility

@@ -1,5 +1,6 @@
 import copy
 import json
+import logging
 from typing import Any, Dict, List, Literal, Tuple
 
 import numpy as np
@@ -222,7 +223,7 @@ class WandbLogger:
             instance = [x["arguments"][0][0] for x in data]
             resps = [x["resps"][0][0] for x in data]
             filtered_resps = [x["filtered_resps"][0] for x in data]
-        elif "generate_until" in config["output_type"]:
+        elif config["output_type"] == "generate_until":
             instance = [x["arguments"][0][0] for x in data]
             resps = [x["resps"][0][0] for x in data]
             filtered_resps = [x["filtered_resps"][0] for x in data]

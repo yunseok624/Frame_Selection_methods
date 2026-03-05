@@ -22,12 +22,10 @@ def ocrbench_doc_to_visual(doc):
     return [doc["image"].convert("RGB")]
 
 
-def ocrbench_doc_to_text(doc, lmms_eval_specific_kwargs):
+def ocrbench_doc_to_text(doc):
     # Assuming the 'doc' dictionary has a key 'question' with the question text
-    pre_prompt = lmms_eval_specific_kwargs.get("pre_prompt", "")
-    post_prompt = lmms_eval_specific_kwargs.get("post_prompt", "")
     question = doc["question"].strip()
-    return f"{pre_prompt}{question}{post_prompt}"
+    return f"{question}"
 
 
 def ocrbench_process_results(doc, results):

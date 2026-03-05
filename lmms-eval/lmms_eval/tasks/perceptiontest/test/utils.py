@@ -2,13 +2,23 @@ import datetime
 import json
 import os
 import sys
+from pathlib import Path
 
-from loguru import logger as eval_logger
+import numpy as np
+import yaml
+from decord import VideoReader, cpu
 
 import lmms_eval.tasks._task_utils.file_utils as file_utils
-from lmms_eval.tasks._task_utils.default_template_yaml import load_default_template_yaml
 
-config = load_default_template_yaml(__file__)
+with open(Path(__file__).parent / "_default_template_yaml", "r") as f:
+    raw_data = f.readlines()
+    safe_data = []
+    for i, line in enumerate(raw_data):
+        # remove function definition since yaml load cannot handle it
+        if "!function" not in line:
+            safe_data.append(line)
+
+    config = yaml.safe_load("".join(safe_data))
 
 # We will unzip all the zip files
 # To HF HOME cache dir
@@ -17,6 +27,8 @@ HF_HOME = os.environ["HF_HOME"]
 cache_dir = config["dataset_kwargs"]["cache_dir"]
 cache_dir = os.path.join(HF_HOME, cache_dir)
 cache_dir = os.path.join(cache_dir, "videos")
+
+from loguru import logger as eval_logger
 
 
 # Pass in video path here

@@ -1,4 +1,4 @@
-from typing import Callable, Dict, Union
+from typing import Callable, Dict
 
 import evaluate as hf_evaluate
 from loguru import logger as eval_logger
@@ -16,8 +16,7 @@ def register_model(*names):
         for name in names:
             assert issubclass(cls, lmms), f"Model '{name}' ({cls.__name__}) must extend lmms class"
 
-            if name in MODEL_REGISTRY:
-                eval_logger.debug(f"Model '{name}' already registered ({MODEL_REGISTRY[name].__name__}); overwriting with {cls.__name__}.")
+            assert name not in MODEL_REGISTRY, f"Model named '{name}' conflicts with existing model! Please register with a non-conflicting alias instead."
 
             MODEL_REGISTRY[name] = cls
         return cls
@@ -37,12 +36,6 @@ GROUP_REGISTRY = {}  # Key: group name, Value: list of task names or group names
 TASK_INITIALIZED = False
 ALL_TASKS = set()  # Set of all task names and group names
 func2task_index = {}  # Key: task ConfigurableTask class, Value: task name
-OUTPUT_TYPE_REGISTRY = {}
-METRIC_REGISTRY = {}
-METRIC_AGGREGATION_REGISTRY = {}
-AGGREGATION_REGISTRY: Dict[str, Callable[[], Dict[str, Callable]]] = {}
-HIGHER_IS_BETTER_REGISTRY = {}
-FILTER_REGISTRY = {}
 
 
 def register_task(name):
@@ -84,7 +77,6 @@ DEFAULT_METRIC_REGISTRY = {
     "multiple_choice": ["acc", "acc_norm"],
     "generate_until": ["exact_match"],
     "generate_until_multi_round": ["exact_match"],
-    "generate_until_agentic": ["exact_match"],
 }
 
 
@@ -164,24 +156,3 @@ def is_higher_better(metric_name):
         return HIGHER_IS_BETTER_REGISTRY[metric_name]
     except KeyError:
         eval_logger.warning(f"higher_is_better not specified for metric '{metric_name}'!")
-
-
-def register_filter(name):
-    def decorate(cls):
-        if name in FILTER_REGISTRY:
-            eval_logger.info(f"Registering filter `{name}` that is already in Registry {FILTER_REGISTRY}")
-        FILTER_REGISTRY[name] = cls
-        return cls
-
-    return decorate
-
-
-def get_filter(filter_name: Union[str, Callable]) -> Callable:
-    try:
-        return FILTER_REGISTRY[filter_name]
-    except KeyError as e:
-        if callable(filter_name):
-            return filter_name
-        else:
-            eval_logger.warning(f"filter `{filter_name}` is not registered!")
-            raise e
