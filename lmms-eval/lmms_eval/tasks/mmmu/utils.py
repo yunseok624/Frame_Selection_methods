@@ -1,17 +1,21 @@
 import ast
 import json
 import os
-import random
 import re
 from collections import defaultdict
 from pathlib import Path
 
-import numpy as np
 import yaml
 from loguru import logger as eval_logger
 
 from lmms_eval.llm_judge import ServerConfig, get_server
 from lmms_eval.tasks._task_utils.file_utils import generate_submission_file
+from lmms_eval.tasks._task_utils.mmmu_mcq_utils import (
+    get_multi_choice_info as shared_get_multi_choice_info,
+)
+from lmms_eval.tasks._task_utils.mmmu_mcq_utils import (
+    parse_mmmu_multi_choice_response,
+)
 
 with open(Path(__file__).parent / "_default_template_yaml", "r") as f:
     raw_data = f.readlines()
@@ -64,6 +68,8 @@ def construct_prompt(doc, mc_prompt="", open_ended_prompt="", prompt_type="reaso
 def mmmu_doc_to_text(doc, lmms_eval_specific_kwargs=None):
     if lmms_eval_specific_kwargs is None:
         question = construct_prompt(doc)
+    elif "format" in lmms_eval_specific_kwargs and lmms_eval_specific_kwargs["format"] == "qwen3_vl":
+        return mmmu_doc_to_text_qwen3vl(doc, lmms_eval_specific_kwargs)
     else:
         question = construct_prompt(doc, lmms_eval_specific_kwargs["multiple_choice_prompt"], lmms_eval_specific_kwargs["open_ended_prompt"], lmms_eval_specific_kwargs["prompt_type"])
     if config["metadata"]["interleaved_format"]:
@@ -72,19 +78,74 @@ def mmmu_doc_to_text(doc, lmms_eval_specific_kwargs=None):
     return question
 
 
+def mmmu_doc_to_text_qwen3vl(doc, lmms_eval_specific_kwargs=None):
+    """
+    Adapted from Qwen3-VL Technical Report: https://arxiv.org/pdf/2511.21631
+    """
+    pre_prompt = lmms_eval_specific_kwargs.get("pre_prompt", "")
+    post_prompt = lmms_eval_specific_kwargs.get("post_prompt", "")
+    open_ended_prompt = lmms_eval_specific_kwargs.get("open_ended_prompt", "")
+
+    question = doc["question"]
+    options = parse_options(ast.literal_eval(doc["options"]))
+    question_type = doc["question_type"]
+
+    if question_type == "multiple-choice":
+        prompt = f"{pre_prompt}{question}\nOptions:\n{options}\n{post_prompt}"
+    else:
+        # open ended question
+        prompt = f"{pre_prompt}{question}\nOptions:\n{options}\n{open_ended_prompt}"
+
+    return prompt
+
+
+def mmmu_doc_to_messages_qwen3vl(doc, lmms_eval_specific_kwargs=None):
+    # If you use doc to messages, the interleaved format is always used
+    question = mmmu_doc_to_text(doc, lmms_eval_specific_kwargs)
+    visuals = mmmu_doc_to_visual(doc)
+    messages = [{"role": "user", "content": []}]
+
+    for img in visuals:
+        messages[0]["content"].append({"type": "image", "url": img})
+    messages[0]["content"].append({"type": "text", "text": question})
+    return messages
+
+
 def mmmu_doc_to_messages(doc, lmms_eval_specific_kwargs=None):
+
+    if "format" in lmms_eval_specific_kwargs and lmms_eval_specific_kwargs["format"] == "qwen3_vl":
+        return mmmu_doc_to_messages_qwen3vl(doc, lmms_eval_specific_kwargs)
+
     # If you use doc to messages, the interleaved format is always used
     config["metadata"]["interleaved_format"] = True
     question = mmmu_doc_to_text(doc, lmms_eval_specific_kwargs)
     visuals = mmmu_doc_to_visual(doc)
+
+    # Duplicate the single image when NUM_IMAGE=2
+    num_image = int(os.environ.get("NUM_IMAGE", "1"))
+    if num_image == 1:
+        pass
+    elif num_image == 2:
+        if len(visuals) == 1:
+            visuals = [visuals[0], visuals[0]]
+    else:
+        raise ValueError(f"num_image must be 1 or 2, got {num_image}")
+
     messages = [{"role": "user", "content": []}]
     interleaved_content = question.split("<image>")
-    for i, (image, text) in enumerate(zip(visuals, interleaved_content)):
-        if text.strip() != "":
-            messages[0]["content"].append({"type": "text", "text": text.strip()})
-        messages[0]["content"].append({"type": "image", "url": image})
-    # There will be one more text part after the last image
-    messages[0]["content"].append({"type": "text", "text": interleaved_content[-1].strip()})
+
+    # Allow more visuals than placeholders by only attaching pre-image text
+    # if a corresponding segment exists. Always append the final trailing text.
+    for i in range(len(visuals)):
+        if i < len(interleaved_content) - 1:
+            text = interleaved_content[i].strip()
+            if text != "":
+                messages[0]["content"].append({"type": "text", "text": text})
+        messages[0]["content"].append({"type": "image", "url": visuals[i]})
+
+    # Append the trailing text after the last image
+    if len(interleaved_content) > 0:
+        messages[0]["content"].append({"type": "text", "text": interleaved_content[-1].strip()})
 
     return messages
 
@@ -132,7 +193,7 @@ def mmmu_reasoning_process_results(doc, results):
             # Parse the result
             if result["success"]:
                 judge_response = result["result"]
-                judge_score = int(judge_response) if type(judge_response) == str else judge_response
+                judge_score = int(judge_response) if isinstance(judge_response, str) else judge_response
             else:
                 eval_logger.error(f"Judge evaluation failed: {result.get('raw_response', 'Unknown error')}")
                 judge_score = 0
@@ -343,59 +404,7 @@ def parse_multi_choice_response(response, all_choices, index2ans):
     Return the predicted index e.g., A, B, C, D.
     https://github.com/MMMU-Benchmark/MMMU/blob/51ce7f3e829c16bb44bc5445782686b4c3508794/eval/eval_utils.py#L10
     """
-    for char in [",", ".", "!", "?", ";", ":", "'"]:
-        response = response.strip(char)
-    response = " " + response + " "  # add space to avoid partial match
-
-    index_ans = True
-    ans_with_brack = False
-    candidates = []
-    for choice in all_choices:  # e.g., (A) (B) (C) (D)
-        if f"({choice})" in response:
-            candidates.append(choice)
-            ans_with_brack = True
-
-    if len(candidates) == 0:
-        for choice in all_choices:  # e.g., A B C D
-            if f"{choice} " in response:
-                candidates.append(choice)
-
-    if len(candidates) == 0:
-        for choice in all_choices:  # e.g., A. B. C. D.
-            if f"{choice}." in response:
-                candidates.append(choice)
-
-    # if all above doesn't get candidates, check if the content is larger than 5 tokens and try to parse the example
-    if len(candidates) == 0 and len(response.split()) > 5:
-        for index, ans in index2ans.items():
-            if ans.lower() in response.lower():
-                candidates.append(index)
-                index_ans = False  # it's content ans.
-
-    if len(candidates) == 0:  # still not get answer, randomly choose one.
-        pred_index = random.choice(all_choices)
-    elif len(candidates) > 1:
-        start_indexes = []
-        if index_ans:
-            if ans_with_brack:
-                for can in candidates:
-                    index = response.rfind(f"({can})")
-                    start_indexes.append(index)  # -1 will be ignored anyway
-                # start_indexes = [generated_response.index(f'({can})') for can in candidates]
-            else:
-                for can in candidates:
-                    index = response.rfind(f" {can} ")
-                    start_indexes.append(index)
-        else:
-            for can in candidates:
-                index = response.lower().rfind(index2ans[can].lower())
-                start_indexes.append(index)
-        # get the last one
-        pred_index = candidates[np.argmax(start_indexes)]
-    else:  # if only one candidate, use it.
-        pred_index = candidates[0]
-
-    return pred_index
+    return parse_mmmu_multi_choice_response(response, all_choices, index2ans)
 
 
 def extract_numbers(string):
@@ -540,11 +549,4 @@ def get_multi_choice_info(options):
     https://github.com/MMMU-Benchmark/MMMU/blob/51ce7f3e829c16bb44bc5445782686b4c3508794/eval/data_utils.py#L54
     """
 
-    start_chr = "A"
-    all_choices = []
-    index2ans = {}
-    for i, option in enumerate(options):
-        index2ans[chr(ord(start_chr) + i)] = option
-        all_choices.append(chr(ord(start_chr) + i))
-
-    return index2ans, all_choices
+    return shared_get_multi_choice_info(options)

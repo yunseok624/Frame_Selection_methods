@@ -1,6 +1,4 @@
-import base64
 import re
-from io import BytesIO
 from typing import List, Optional, Tuple, Union
 
 import decord
@@ -20,13 +18,11 @@ from lmms_eval import utils
 from lmms_eval.api.instance import Instance
 from lmms_eval.api.model import lmms
 from lmms_eval.api.registry import register_model
-from lmms_eval.models.model_utils.reasoning_model_utils import (
-    parse_reasoning_model_answer,
-)
+from lmms_eval.imports import optional_import
+from lmms_eval.models.model_utils.media_encoder import encode_image_to_data_url
 
-try:
-    from qwen_vl_utils import process_vision_info
-except ImportError:
+process_vision_info, _has_qwen_vl = optional_import("qwen_vl_utils", "process_vision_info")
+if not _has_qwen_vl:
     eval_logger.warning("Failed to import qwen_vl_utils; Please install it via `pip install qwen-vl-utils`")
 
 
@@ -48,9 +44,6 @@ class Qwen2_5_VL(lmms):
         min_pixels: int = 256 * 28 * 28,
         max_pixels: int = 1605632,
         max_num_frames: int = 32,
-        use_custom_video_loader: Optional[bool] = False,
-        fps: Optional[float] = None,  # Only applicable if use_custom_video_loader is True
-        max_image_size: Optional[int] = None,  # Only applicable if use_custom_video_loader is True
         system_prompt: Optional[str] = "You are a helpful assistant.",
         interleave_visuals: Optional[bool] = False,
         reasoning_prompt: Optional[str] = None,
@@ -64,14 +57,6 @@ class Qwen2_5_VL(lmms):
         valid_attn_implementations = [None, "flash_attention_2", "sdpa", "eager"]
         if attn_implementation not in valid_attn_implementations:
             raise ValueError(f"attn_implementation must be one of {valid_attn_implementations}, got {attn_implementation}")
-
-        self.use_custom_video_loader = use_custom_video_loader
-        self.fps = fps
-        # if self.fps and not self.use_custom_video_loader:
-        #     raise ValueError("FPS is only applicable if use_custom_video_loader is True")
-        self.max_image_size = max_image_size
-        if self.max_image_size and not self.use_custom_video_loader:
-            raise ValueError("max_image_size is only applicable if use_custom_video_loader is True")
 
         accelerator = Accelerator()
         self.accelerator = accelerator
@@ -180,6 +165,15 @@ class Qwen2_5_VL(lmms):
                 new_list.append(j)
         return new_list
 
+    def _encode_image_data_url(self, image: Image.Image) -> str:
+        return encode_image_to_data_url(
+            image,
+            image_format="JPEG",
+            mime_type="image/jpeg",
+            convert_rgb=True,
+            quality=85,
+        )
+
     def generate_until(self, requests: List[Instance]) -> List[str]:
         res = []
 
@@ -242,14 +236,23 @@ class Qwen2_5_VL(lmms):
                             first_frame = vr[0].asnumpy()
                             height, width = first_frame.shape[:2]
                             # max_pixels = height * width
-                            processed_visuals.append({"type": "video", "video": visual, "max_pixels": self.max_pixels, "min_pixels": self.min_pixels})
+                            processed_visuals.append(
+                                {
+                                    "type": "video",
+                                    "video": visual,
+                                    "max_pixels": self.max_pixels,
+                                    "min_pixels": self.min_pixels,
+                                }
+                            )
                         elif isinstance(visual, Image.Image):  # Handle both single and multiple images
-                            base64_image = visual.convert("RGB")
-                            buffer = BytesIO()
-                            base64_image.save(buffer, format="JPEG")
-                            base64_bytes = base64.b64encode(buffer.getvalue())
-                            base64_string = base64_bytes.decode("utf-8")
-                            processed_visuals.append({"type": "image", "image": f"data:image/jpeg;base64,{base64_string}", "max_pixels": self.max_pixels, "min_pixels": self.min_pixels})
+                            processed_visuals.append(
+                                {
+                                    "type": "image",
+                                    "image": self._encode_image_data_url(visual),
+                                    "max_pixels": self.max_pixels,
+                                    "min_pixels": self.min_pixels,
+                                }
+                            )
 
                 if self.interleave_visuals is False:
                     message.append(
@@ -282,17 +285,27 @@ class Qwen2_5_VL(lmms):
 
                 batched_messages.append(message)
 
-            texts = [self.processor.apply_chat_template(msg, tokenize=False, add_generation_prompt=True) for msg in batched_messages]
+            texts = self.processor.apply_chat_template(batched_messages, tokenize=False, add_generation_prompt=True)
             image_inputs, video_inputs = process_vision_info(batched_messages)
             if video_inputs is not None:
                 total_frames = video_inputs[0].shape[0]
                 indices = np.linspace(0, total_frames - 1, self.max_num_frames, dtype=int)
+                # Ensure unique indices if linspace produces duplicates for few frames
+                indices = np.unique(indices)
                 # Append the last frame index if not already included
                 if total_frames - 1 not in indices:
                     indices = np.append(indices, total_frames - 1)
+                    indices = np.unique(indices)  # Ensure uniqueness again
                 video_inputs[0] = video_inputs[0][indices]
-            inputs = self.processor(text=texts, images=image_inputs, videos=video_inputs, padding=True, return_tensors="pt")
-
+            padding_side = "left" if self.batch_size > 1 else "right"
+            inputs = self.processor(
+                text=texts,
+                images=image_inputs,
+                videos=video_inputs,
+                padding=True,
+                padding_side=padding_side,
+                return_tensors="pt",
+            )
             if self.device_map == "auto":
                 inputs = inputs.to("cuda")
             else:
@@ -329,7 +342,11 @@ class Qwen2_5_VL(lmms):
             )
 
             generated_ids_trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, cont)]
-            answers = self.processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)
+            answers = self.processor.batch_decode(
+                generated_ids_trimmed,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False,
+            )
             for i, ans in enumerate(answers):
                 for term in until:
                     if len(term) > 0:
@@ -337,19 +354,226 @@ class Qwen2_5_VL(lmms):
                 answers[i] = ans
 
             for ans, context in zip(answers, contexts):
-                clean_ans = parse_reasoning_model_answer(ans)
-                res.append(clean_ans)
-                self.cache_hook.add_partial("generate_until", (context, gen_kwargs), clean_ans)
+                res.append(ans)
+                self.cache_hook.add_partial("generate_until", (context, gen_kwargs), ans)
                 pbar.update(1)
 
                 # eval_logger.debug(f"Question: {context}")
-                # eval_logger.debug(f"Model Raw Response: {ans}")
-                # eval_logger.debug(f"Model Clean Response: {clean_ans}")
+                # eval_logger.debug(f"Model Response: {ans}")
             # reorder this group of results back to original unsorted form
         res = re_ords.get_original(res)
 
         pbar.close()
         return res
 
-    def generate_until_multi_round(self, requests) -> List[str]:
-        raise NotImplementedError("TODO: Implement multi-round generation")
+    def generate_until_multi_round(self, requests: List[Instance]) -> List[str]:
+        res = []
+
+        def _collate(x):
+            toks = self.tokenizer.encode(x[0])
+            return -len(toks), x[0]
+
+        metadata = requests[0].metadata
+        re_ords = utils.Collator([reg.args for reg in requests], _collate, grouping=True)
+        chunks = re_ords.get_batched(n=self.batch_size, batch_fn=None)
+        num_iters = len(requests) // self.batch_size if len(requests) % self.batch_size == 0 else len(requests) // self.batch_size + 1
+        pbar = tqdm(total=num_iters, disable=(self.rank != 0), desc="Model Responding")
+
+        for chunk in chunks:
+            (
+                batched_contexts,
+                all_gen_kwargs,
+                batched_doc_to_visual,
+                batched_doc_to_text,
+                batched_doc_id,
+                batched_task,
+                batched_split,
+            ) = zip(*chunk)
+            task = batched_task[0]
+            split = batched_split[0]
+            batched_visuals = [batched_doc_to_visual[0](self.task_dict[task][split][ids]) for ids in batched_doc_id]
+            assert len(batched_visuals) == 1
+
+            gen_kwargs = all_gen_kwargs[0]
+            if "until" in gen_kwargs:
+                gen_kwargs.pop("until")
+
+            round_idx = 0
+            batched_round_res = []
+            batched_previous_round_info = None
+            while True:
+                contexts = []
+                visuals_list = []
+
+                if round_idx != 0:
+                    (
+                        visuals_list,
+                        contexts,
+                        batched_terminal_signal,
+                        batched_round_res,
+                        batched_previous_round_info,
+                    ) = list(
+                        zip(
+                            *[
+                                batched_doc_to_text[0](
+                                    self.task_dict[task][split][ids],
+                                    previous_output=[round_res[ids_idx] for round_res in batched_round_res],
+                                    round_idx=round_idx,
+                                    previous_round_info=batched_previous_round_info[ids_idx] if batched_previous_round_info is not None else None,
+                                )
+                                for ids_idx, ids in enumerate(batched_doc_id)
+                            ]
+                        )
+                    )
+                    batched_round_res = list(zip(*batched_round_res))
+                    if batched_terminal_signal[0]:
+                        break
+                else:
+                    visuals_list = batched_visuals
+                    contexts = list(batched_contexts)
+
+                for i in range(len(contexts)):
+                    if "<image>" in contexts[i]:
+                        contexts[i] = contexts[i].replace("<image>", "")
+
+                batched_messages = []
+                for i, context in enumerate(contexts):
+                    if "<image>" in context:
+                        context = context.replace("<image>", "")
+
+                    message = [{"role": "system", "content": self.system_prompt}]
+                    if self.reasoning_prompt:
+                        context = context.strip() + self.reasoning_prompt
+
+                    processed_visuals = []
+                    if visuals_list[i] is not None:
+                        for visual in visuals_list[i]:
+                            if isinstance(visual, str) and visual.endswith((".mp4", ".avi", ".mov")):
+                                vr = decord.VideoReader(visual)
+                                first_frame = vr[0].asnumpy()
+                                height, width = first_frame.shape[:2]
+                                processed_visuals.append(
+                                    {
+                                        "type": "video",
+                                        "video": visual,
+                                        "max_pixels": self.max_pixels,
+                                        "min_pixels": self.min_pixels,
+                                    }
+                                )
+                            elif isinstance(visual, Image.Image):
+                                processed_visuals.append(
+                                    {
+                                        "type": "image",
+                                        "image": self._encode_image_data_url(visual),
+                                        "max_pixels": self.max_pixels,
+                                        "min_pixels": self.min_pixels,
+                                    }
+                                )
+
+                    if self.interleave_visuals is False:
+                        message.append(
+                            {
+                                "role": "user",
+                                "content": processed_visuals + [{"type": "text", "text": context}],
+                            }
+                        )
+                    else:
+                        image_placeholders = re.findall(r"<image \d+>", context)
+                        content_parts = []
+                        text_parts = re.split(r"<image \d+>", context)
+                        if text_parts[0]:
+                            content_parts.append({"type": "text", "text": text_parts[0]})
+
+                        for j, placeholder in enumerate(image_placeholders):
+                            img_idx = int(re.search(r"<image (\d+)>", placeholder).group(1)) - 1
+                            image_idx = min(img_idx, len(processed_visuals) - 1) if processed_visuals else 0
+                            if processed_visuals and image_idx < len(processed_visuals):
+                                content_parts.append(processed_visuals[image_idx])
+                            if j + 1 < len(text_parts) and text_parts[j + 1]:
+                                content_parts.append({"type": "text", "text": text_parts[j + 1]})
+
+                        message.append(
+                            {
+                                "role": "user",
+                                "content": content_parts,
+                            }
+                        )
+
+                    batched_messages.append(message)
+
+                texts = [self.processor.apply_chat_template(msg, tokenize=False, add_generation_prompt=True) for msg in batched_messages]
+                image_inputs, video_inputs = process_vision_info(batched_messages)
+                if video_inputs is not None:
+                    total_frames = video_inputs[0].shape[0]
+                    indices = np.linspace(0, total_frames - 1, self.max_num_frames, dtype=int)
+                    indices = np.unique(indices)
+                    if total_frames - 1 not in indices:
+                        indices = np.append(indices, total_frames - 1)
+                        indices = np.unique(indices)
+                    video_inputs[0] = video_inputs[0][indices]
+                inputs = self.processor(
+                    text=texts,
+                    images=image_inputs,
+                    videos=video_inputs,
+                    padding=True,
+                    return_tensors="pt",
+                )
+
+                if self.device_map == "auto":
+                    inputs = inputs.to("cuda")
+                else:
+                    inputs = inputs.to(self.device)
+
+                default_gen_kwargs = {
+                    "max_new_tokens": 32768,
+                    "temperature": 0.0,
+                    "top_p": None,
+                    "num_beams": 1,
+                }
+                current_gen_kwargs = {**default_gen_kwargs, **gen_kwargs}
+                pad_token_id = self.tokenizer.pad_token_id
+
+                if current_gen_kwargs["temperature"] > 0:
+                    current_gen_kwargs["do_sample"] = True
+                else:
+                    current_gen_kwargs["do_sample"] = False
+                    current_gen_kwargs["temperature"] = None
+                    current_gen_kwargs["top_p"] = None
+
+                cont = self.model.generate(
+                    **inputs,
+                    eos_token_id=self.tokenizer.eos_token_id,
+                    pad_token_id=pad_token_id,
+                    do_sample=current_gen_kwargs["do_sample"],
+                    temperature=current_gen_kwargs["temperature"],
+                    top_p=current_gen_kwargs["top_p"],
+                    num_beams=current_gen_kwargs["num_beams"],
+                    max_new_tokens=current_gen_kwargs["max_new_tokens"],
+                    use_cache=self.use_cache,
+                )
+
+                generated_ids_trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, cont)]
+                answers = self.processor.batch_decode(
+                    generated_ids_trimmed,
+                    skip_special_tokens=True,
+                    clean_up_tokenization_spaces=False,
+                )
+
+                clean_answers = []
+                for ans in answers:
+                    clean_answers.append(ans)
+
+                batched_round_res.append(clean_answers)
+                round_idx += 1
+
+            res.extend(list(zip(*batched_round_res)))
+            self.cache_hook.add_partial(
+                "generate_until_multi_round",
+                (batched_contexts[0], gen_kwargs),
+                batched_round_res,
+            )
+            pbar.update(1)
+
+        res = re_ords.get_original(res)
+        pbar.close()
+        return res
