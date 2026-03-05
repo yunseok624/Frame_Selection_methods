@@ -149,6 +149,7 @@ class LlavaVid(lmms):
         self.torch_dtype = torch_dtype
 
         quantization_config = None
+        device_map_for_loading = self.device_map
         if load_8bit or load_4bit:
             quantization_config = BitsAndBytesConfig(
                 load_in_8bit=load_8bit,
@@ -156,8 +157,7 @@ class LlavaVid(lmms):
             )
             load_8bit = False
             load_4bit = False
-            if isinstance(self.device_map, str) and "cuda" in self.device_map and self.device_map != "auto":
-                self.device_map = {"": int(self.device_map.split(":")[-1])}
+            device_map_for_loading = "auto"
 
         if self.overwrite == True:
             overwrite_config = {}
@@ -187,10 +187,10 @@ class LlavaVid(lmms):
                     overwrite_config["tokenizer_model_max_length"] = 4096 * scaling_factor
 
             self._tokenizer, self._model, self._image_processor, self._max_length = load_pretrained_model(
-                pretrained, None, self.model_name, device_map=self.device_map, torch_dtype=self.torch_dtype, overwrite_config=overwrite_config, attn_implementation=attn_implementation, load_8bit=load_8bit, load_4bit=load_4bit, quantization_config=quantization_config
+                pretrained, None, self.model_name, device_map=device_map_for_loading, torch_dtype=self.torch_dtype, overwrite_config=overwrite_config, attn_implementation=attn_implementation, load_8bit=load_8bit, load_4bit=load_4bit, quantization_config=quantization_config
             )
         else:
-            self._tokenizer, self._model, self._image_processor, self._max_length = load_pretrained_model(pretrained, None, self.model_name, device_map=self.device_map, torch_dtype=self.torch_dtype, attn_implementation=attn_implementation, load_8bit=load_8bit, load_4bit=load_4bit, quantization_config=quantization_config)
+            self._tokenizer, self._model, self._image_processor, self._max_length = load_pretrained_model(pretrained, None, self.model_name, device_map=device_map_for_loading, torch_dtype=self.torch_dtype, attn_implementation=attn_implementation, load_8bit=load_8bit, load_4bit=load_4bit, quantization_config=quantization_config)
 
         self._config = self._model.config
         # print(attn_implementation)
