@@ -156,6 +156,8 @@ class LlavaVid(lmms):
             )
             load_8bit = False
             load_4bit = False
+            if isinstance(self.device_map, str) and "cuda" in self.device_map and self.device_map != "auto":
+                self.device_map = {"": int(self.device_map.split(":")[-1])}
 
         if self.overwrite == True:
             overwrite_config = {}
