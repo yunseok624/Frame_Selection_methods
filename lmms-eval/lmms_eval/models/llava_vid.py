@@ -150,6 +150,8 @@ class LlavaVid(lmms):
 
         quantization_config = None
         device_map_for_loading = self.device_map
+        load_in_8bit_kwargs = load_8bit
+        load_in_4bit_kwargs = load_4bit
         if load_8bit or load_4bit:
             quantization_config = BitsAndBytesConfig(
                 load_in_8bit=load_8bit,
@@ -190,10 +192,10 @@ class LlavaVid(lmms):
                     overwrite_config["tokenizer_model_max_length"] = 4096 * scaling_factor
 
             self._tokenizer, self._model, self._image_processor, self._max_length = load_pretrained_model(
-                pretrained, None, self.model_name, device_map=device_map_for_loading, torch_dtype=self.torch_dtype, overwrite_config=overwrite_config, attn_implementation=attn_implementation, load_8bit=load_8bit, load_4bit=load_4bit, quantization_config=quantization_config
+                pretrained, None, self.model_name, device_map=device_map_for_loading, torch_dtype=self.torch_dtype, overwrite_config=overwrite_config, attn_implementation=attn_implementation, load_8bit=load_8bit, load_4bit=load_4bit, quantization_config=quantization_config, load_in_8bit=load_in_8bit_kwargs, load_in_4bit=load_in_4bit_kwargs
             )
         else:
-            self._tokenizer, self._model, self._image_processor, self._max_length = load_pretrained_model(pretrained, None, self.model_name, device_map=device_map_for_loading, torch_dtype=self.torch_dtype, attn_implementation=attn_implementation, load_8bit=load_8bit, load_4bit=load_4bit, quantization_config=quantization_config)
+            self._tokenizer, self._model, self._image_processor, self._max_length = load_pretrained_model(pretrained, None, self.model_name, device_map=device_map_for_loading, torch_dtype=self.torch_dtype, attn_implementation=attn_implementation, load_8bit=load_8bit, load_4bit=load_4bit, quantization_config=quantization_config, load_in_8bit=load_in_8bit_kwargs, load_in_4bit=load_in_4bit_kwargs)
 
         self._config = self._model.config
         # print(attn_implementation)
