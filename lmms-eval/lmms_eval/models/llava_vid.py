@@ -154,6 +154,9 @@ class LlavaVid(lmms):
             quantization_config = BitsAndBytesConfig(
                 load_in_8bit=load_8bit,
                 load_in_4bit=load_4bit,
+                bnb_4bit_compute_dtype=torch.float16 if load_4bit else None,
+                bnb_4bit_use_double_quant=True if load_4bit else False,
+                bnb_4bit_quant_type="nf4" if load_4bit else "fp4",
             )
             load_8bit = False
             load_4bit = False
