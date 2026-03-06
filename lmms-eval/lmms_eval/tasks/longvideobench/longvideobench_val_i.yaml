@@ -1,9 +1,8 @@
-dataset_path: ./datasets/longvideobench
+dataset_path: longvideobench/LongVideoBench
 dataset_kwargs:
-  data_files: {"validation" : lvb_val.json}
-  token: False
+  token: True
   cache_dir: longvideobench
-  video: False
+  video: True
   force_download: False
   local_files_only: False
   # From_YouTube: True
