@@ -30,7 +30,7 @@ from llava.model.language_model.llava_qwen import LlavaQwenConfig
 from loguru import logger as eval_logger
 from PIL import Image
 from tqdm import tqdm
-from transformers import AutoConfig, AutoModelForCausalLM, BitsAndBytesConfig
+from transformers import AutoConfig, AutoModelForCausalLM
 
 from lmms_eval.api.instance import Instance
 from lmms_eval.api.model import lmms
@@ -148,20 +148,8 @@ class LlavaVid(lmms):
         # self.faster_token_stride = faster_token_stride
         self.torch_dtype = torch_dtype
 
-        quantization_config = None
         device_map_for_loading = self.device_map
-        load_in_8bit_kwargs = load_8bit
-        load_in_4bit_kwargs = load_4bit
         if load_8bit or load_4bit:
-            quantization_config = BitsAndBytesConfig(
-                load_in_8bit=load_8bit,
-                load_in_4bit=load_4bit,
-                bnb_4bit_compute_dtype=torch.float16 if load_4bit else None,
-                bnb_4bit_use_double_quant=True if load_4bit else False,
-                bnb_4bit_quant_type="nf4" if load_4bit else "fp4",
-            )
-            load_8bit = False
-            load_4bit = False
             device_map_for_loading = "auto"
 
         if self.overwrite == True:
@@ -192,10 +180,10 @@ class LlavaVid(lmms):
                     overwrite_config["tokenizer_model_max_length"] = 4096 * scaling_factor
 
             self._tokenizer, self._model, self._image_processor, self._max_length = load_pretrained_model(
-                pretrained, None, self.model_name, device_map=device_map_for_loading, torch_dtype=self.torch_dtype, overwrite_config=overwrite_config, attn_implementation=attn_implementation, load_8bit=load_8bit, load_4bit=load_4bit, quantization_config=quantization_config, load_in_8bit=load_in_8bit_kwargs, load_in_4bit=load_in_4bit_kwargs
+                pretrained, None, self.model_name, device_map=device_map_for_loading, torch_dtype=self.torch_dtype, overwrite_config=overwrite_config, attn_implementation=attn_implementation, load_8bit=load_8bit, load_4bit=load_4bit
             )
         else:
-            self._tokenizer, self._model, self._image_processor, self._max_length = load_pretrained_model(pretrained, None, self.model_name, device_map=device_map_for_loading, torch_dtype=self.torch_dtype, attn_implementation=attn_implementation, load_8bit=load_8bit, load_4bit=load_4bit, quantization_config=quantization_config, load_in_8bit=load_in_8bit_kwargs, load_in_4bit=load_in_4bit_kwargs)
+            self._tokenizer, self._model, self._image_processor, self._max_length = load_pretrained_model(pretrained, None, self.model_name, device_map=device_map_for_loading, torch_dtype=self.torch_dtype, attn_implementation=attn_implementation, load_8bit=load_8bit, load_4bit=load_4bit)
 
         self._config = self._model.config
         # print(attn_implementation)
@@ -243,7 +231,7 @@ class LlavaVid(lmms):
             self._word_size = 1
         else:
             eval_logger.info(f"Using single device: {self._device}")
-            if quantization_config is None:
+            if not (load_8bit or load_4bit):
                 self.model.to(self._device)
             self._rank = 0
             self._world_size = 1
