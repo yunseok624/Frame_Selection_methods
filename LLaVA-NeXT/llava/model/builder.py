@@ -227,7 +227,15 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
                             setattr(llava_cfg, k, v)
                         model = LlavaQwenForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, attn_implementation=attn_implementation, config=llava_cfg, **kwargs)
                     else:
+                        if load_8bit or load_4bit:
+                            import transformers
+                            _orig_to = transformers.modeling_utils.PreTrainedModel.to
+                            transformers.modeling_utils.PreTrainedModel.to = lambda self, *args, **kw: self
+                        
                         model = LlavaQwenForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, attn_implementation=attn_implementation, **kwargs)
+
+                        if load_8bit or load_4bit:
+                            transformers.modeling_utils.PreTrainedModel.to = _orig_to
 
             elif "gemma" in model_name.lower():
                 tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
