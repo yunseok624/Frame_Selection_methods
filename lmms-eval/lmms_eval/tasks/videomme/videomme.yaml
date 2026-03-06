@@ -1,4 +1,4 @@
-dataset_path: ./datasets/videomme/
+dataset_path: /content/drive/MyDrive/datasets/videomme/
 dataset_kwargs:
   data_files: {"test" : include_frame_idx.json}
   token: False
