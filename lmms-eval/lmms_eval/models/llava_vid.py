@@ -1,644 +1,305 @@
-import math
+#    Copyright 2023 Haotian Liu
+#
+#    Licensed under the Apache License, Version 2.0 (the "License");
+#    you may not use this file except in compliance with the License.
+#    You may obtain a copy of the License at
+#
+#        http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS,
+#    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#    See the License for the specific language governing permissions and
+#    limitations under the License.
+
+
 import os
-from datetime import timedelta
-from typing import List, Optional, Tuple, Union
+import warnings
+import shutil
 
-import numpy as np
+from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig, BitsAndBytesConfig
 import torch
-from accelerate import Accelerator, DistributedType, InitProcessGroupKwargs
-from accelerate.state import AcceleratorState
-from decord import VideoReader, cpu
-from llava.constants import (
-    DEFAULT_IM_END_TOKEN,
-    DEFAULT_IM_START_TOKEN,
-    DEFAULT_IMAGE_TOKEN,
-    IGNORE_INDEX,
-    IMAGE_TOKEN_INDEX,
-)
-from llava.conversation import SeparatorStyle, conv_templates
-from llava.mm_utils import (
-    KeywordsStoppingCriteria,
-    get_model_name_from_path,
-    tokenizer_image_token,
-)
-from llava.model.builder import load_pretrained_model
-from llava.model.language_model.llava_llama import LlavaConfig
-from llava.model.language_model.llava_qwen import LlavaQwenConfig
-
-# eval_logger = logging.getLogger("lmms-eval")
-# import sys;sys.path.append("llava-video")
-from loguru import logger as eval_logger
-from PIL import Image
-from tqdm import tqdm
-from transformers import AutoConfig, AutoModelForCausalLM
-
-from lmms_eval.api.instance import Instance
-from lmms_eval.api.model import lmms
-from lmms_eval.api.registry import register_model
-from lmms_eval.models.model_utils.load_video import read_video_pyav
-import pickle
-# try:
-#     from llavavid.model.builder import load_pretrained_model
-#     from llavavid.mm_utils import tokenizer_image_token, get_model_name_from_path, KeywordsStoppingCriteria
-#     from llavavid.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN, IGNORE_INDEX
-#     from llavavid.conversation import conv_templates, SeparatorStyle
-#     from llavavid.mm_utils import tokenizer_image_token_qwen_merge, preprocess_qwen, preprocess_llama3
-# except ImportError:
-#     import llava
-#     import pdb;pdb.set_trace()
-#     if "llava-video-old" in llava.__file__:
-#         from llava.model.language_model.llava_llama import LlavaConfig
-#         from llava.model.language_model.llava_qwen import LlavaQwenConfig
-#         from llava.model.builder import load_pretrained_model
-#         from llava.mm_utils import tokenizer_image_token, get_model_name_from_path, KeywordsStoppingCriteria
-#         from llava.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN, IGNORE_INDEX
-#         from llava.conversation import conv_templates, SeparatorStyle
-
-#         AutoConfig.register("llava_llama", LlavaConfig)
-#         AutoConfig.register("llava_qwen", LlavaQwenConfig)
-#     else:
-#         eval_logger.debug("LLaVA-Video is not installed. Please install LLaVA-Video to use this model.")
-
-# from llavavid.model.language_model.llava_qwen import LlavaQwenConfig
-# from llavavid.model.language_model.llava_llama import LlavaConfig
-
-# AutoConfig.register("llava_qwen", LlavaQwenConfig)
-# AutoConfig.register("llava_llama", LlavaConfig)
+from llava.model import *
+from llava.constants import DEFAULT_IMAGE_PATCH_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
+from llava.utils import rank0_print
 
 
-AutoConfig.register("llava_llama", LlavaConfig)
-AutoConfig.register("llava_qwen", LlavaQwenConfig)
+def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, load_4bit=False, device_map="auto", torch_dtype="float16",attn_implementation="flash_attention_2", customized_config=None, overwrite_config=None, **kwargs):
+    kwargs["device_map"] = device_map
 
+    if load_8bit:
+        kwargs["load_in_8bit"] = True
+    elif load_4bit:
+        kwargs["load_in_4bit"] = True
+        kwargs["quantization_config"] = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16, bnb_4bit_use_double_quant=True, bnb_4bit_quant_type="nf4")
+    elif torch_dtype == "float16":
+        kwargs["torch_dtype"] = torch.float16
+    elif torch_dtype == "bfloat16":
+        kwargs["torch_dtype"] = torch.bfloat16
+    else:
+        import pdb;pdb.set_trace()
 
-@register_model("llava_vid")
-class LlavaVid(lmms):
-    """
-    LlavaVid Model
-    """
+    if customized_config is not None:
+        kwargs["config"] = customized_config
 
-    def __init__(
-        self,
-        pretrained: str = "liuhaotian/llava-v1.5-7b",
-        truncation: Optional[bool] = True,
-        torch_dtype: Optional[Union[str, torch.dtype]] = "float16",
-        device: Optional[str] = "cuda:0",
-        batch_size: Optional[Union[int, str]] = 1,
-        attn_implementation=(
-            "sdpa" if torch.__version__ >= "2.1.2" else "eager"
-        ),  # inference implementation for attention, can be "sdpa", "eager", "flash_attention_2". Seems FA2 is not effective during inference: https://discuss.huggingface.co/t/flash-attention-has-no-effect-on-inference/73453/5
-        device_map="cuda:0",
-        load_8bit: bool = False,
-        load_4bit: bool = False,
-        conv_template="vicuna_v1",
-        use_cache=True,
-        truncate_context=False,  # whether to truncate the context in generation, set it False for LLaVA-1.6
-        max_frames_num: int = 3,
-        video_fps: int = 1,
-        mm_resampler_type: str = "spatial_pool",
-        mm_spatial_pool_stride: int = 2,
-        mm_spatial_pool_out_channels: int = 1024,
-        mm_spatial_pool_mode: str = "average",
-        mm_resampler_location: str = "before",
-        mm_newline_position: str = "grid",
-        overwrite: bool = True,
-        video_decode_backend: str = "decord",
-        delay_load: bool = False,
-        tie_weights: bool = True,
-        force_sample: bool = False,
-        add_time_instruction: bool = False,
-        add_faster_video: bool = False,
-        faster_token_stride: int = 10,
-        use_topk: bool = False,
-        **kwargs,
-    ) -> None:
-        super().__init__()
-        assert kwargs == {}, f"Unexpected kwargs: {kwargs}"
+    if "multimodal" in kwargs:
+        if kwargs["multimodal"] is True:
+            is_multimodal = True
+            kwargs.pop("multimodal")
+    else:
+        is_multimodal = False
 
-        accelerator_kwargs = InitProcessGroupKwargs(timeout=timedelta(weeks=52))
-        accelerator = Accelerator(kwargs_handlers=[accelerator_kwargs])
-        if accelerator.num_processes > 1:
-            self._device = torch.device(f"cuda:{accelerator.local_process_index}")
-            self.device_map = f"cuda:{accelerator.local_process_index}"
-        elif accelerator.num_processes == 1 and (device_map == "auto" or device_map == "balanced_low_0"):
-            self._device = torch.device(device)
-            self.device_map = device_map
-        else:
-            self._device = torch.device(f"cuda:{accelerator.local_process_index}")
-            self.device_map = f"cuda:{accelerator.local_process_index}"
-
-        self.use_topk = use_topk
-        
-        self.pretrained = pretrained
-        self.model_name = get_model_name_from_path(pretrained)
-        self.video_decode_backend = video_decode_backend
-        # self._config = AutoConfig.from_pretrained(self.pretrained)
-        self.overwrite = overwrite
-        self.mm_resampler_type = mm_resampler_type
-        self.mm_spatial_pool_stride = int(mm_spatial_pool_stride)
-        self.mm_spatial_pool_out_channels = int(mm_spatial_pool_out_channels)
-        self.mm_spatial_pool_mode = mm_spatial_pool_mode
-        self.max_frames_num = int(max_frames_num)
-        self.fps = int(video_fps)
-        self.mm_resampler_location = mm_resampler_location
-        self.delay_load = delay_load
-        self.force_sample = force_sample
-        self.add_time_instruction = add_time_instruction
-        print("force sample:", self.force_sample)
-        # self.add_faster_video = add_faster_video
-        # self.faster_token_stride = faster_token_stride
-        self.torch_dtype = torch_dtype
-
-        device_map_for_loading = self.device_map
-        if load_8bit or load_4bit:
-            device_map_for_loading = "auto"
-
-        if self.overwrite == True:
-            overwrite_config = {}
-            # overwrite_config["mm_resampler_type"] = self.mm_resampler_type
-            overwrite_config["mm_spatial_pool_stride"] = self.mm_spatial_pool_stride
-            overwrite_config["mm_spatial_pool_mode"] = self.mm_spatial_pool_mode
-            overwrite_config["mm_pooling_position"] = self.mm_resampler_location
-            overwrite_config["mm_newline_position"] = mm_newline_position
-            overwrite_config["delay_load"] = self.delay_load
-            # overwrite_config["attn_implementation"] = attn_implementation
-
-            if "vicuna" in self.pretrained.lower() or "yi" in self.pretrained.lower():
-                cfg_pretrained = AutoConfig.from_pretrained(self.pretrained)
-
-                if "224" in cfg_pretrained.mm_vision_tower:
-                    # suppose the length of text tokens is around 1000, from bo's report
-                    least_token_number = self.max_frames_num * (16 // self.mm_spatial_pool_stride) ** 2 + 1000
-                else:
-                    least_token_number = self.max_frames_num * (24 // self.mm_spatial_pool_stride) ** 2 + 1000
-
-                scaling_factor = math.ceil(least_token_number / 4096)
-                if scaling_factor >= 2:
-                    eval_logger.info(f"Scaling factor: {scaling_factor}")
-                    # print(float(scaling_factor))
-                    overwrite_config["rope_scaling"] = {"factor": float(scaling_factor), "type": "linear"}
-                    overwrite_config["max_sequence_length"] = 4096 * scaling_factor
-                    overwrite_config["tokenizer_model_max_length"] = 4096 * scaling_factor
-
-            self._tokenizer, self._model, self._image_processor, self._max_length = load_pretrained_model(
-                pretrained, None, self.model_name, device_map=device_map_for_loading, torch_dtype=self.torch_dtype, overwrite_config=overwrite_config, attn_implementation=attn_implementation, load_8bit=load_8bit, load_4bit=load_4bit
+    if "llava" in model_name.lower() or is_multimodal:
+        # Load LLaVA model
+        if "lora" in model_name.lower() and model_base is None:
+            warnings.warn(
+                "There is `lora` in model name but no `model_base` is provided. If you are loading a LoRA model, please provide the `model_base` argument. Detailed instruction: https://github.com/haotian-liu/LLaVA#launch-a-model-worker-lora-weights-unmerged."
             )
-        else:
-            self._tokenizer, self._model, self._image_processor, self._max_length = load_pretrained_model(pretrained, None, self.model_name, device_map=device_map_for_loading, torch_dtype=self.torch_dtype, attn_implementation=attn_implementation, load_8bit=load_8bit, load_4bit=load_4bit)
+        if "lora" in model_name.lower() and model_base is not None:
+            lora_cfg_pretrained = AutoConfig.from_pretrained(model_path)
+            tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
+            rank0_print("Loading LLaVA from base model...")
+            if "mixtral" in model_name.lower():
+                from llava.model.language_model.llava_mixtral import LlavaMixtralConfig
 
-        self._config = self._model.config
-        # print(attn_implementation)
+                lora_cfg_pretrained = LlavaMixtralConfig.from_pretrained(model_path)
+                tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
+                model = LlavaMixtralForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, config=lora_cfg_pretrained, attn_implementation=attn_implementation, **kwargs)
+            elif "mistral" in model_name.lower():
+                from llava.model.language_model.llava_mistral import LlavaMistralConfig
 
-        # import pdb;pdb.set_trace()
+                lora_cfg_pretrained = LlavaMistralConfig.from_pretrained(model_path)
+                tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
+                model = LlavaMistralForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, config=lora_cfg_pretrained, attn_implementation=attn_implementation, **kwargs)
+            elif "gemma" in model_name.lower():
+                from llava.model.language_model.llava_gemma import LlavaGemmaConfig
 
-        if self._tokenizer.pad_token_id is None:
-            if "qwen" in self._tokenizer.name_or_path.lower():
-                print("Setting pad token to bos token for qwen model.")
-                self._tokenizer.pad_token_id = 151643
-
-        self.model.eval()
-        if tie_weights:
-            self.model.tie_weights()
-        self.truncation = truncation
-        self.batch_size_per_gpu = int(batch_size)
-        self.conv_template = conv_template
-        self.use_cache = use_cache
-        self.truncate_context = truncate_context
-        # assert self.batch_size_per_gpu == 1, "Llava currently does not support batched generation. See https://github.com/haotian-liu/LLaVA/issues/754. HF Llava also has this issue."
-        if accelerator.num_processes > 1:
-            assert accelerator.distributed_type in [DistributedType.FSDP, DistributedType.MULTI_GPU, DistributedType.DEEPSPEED], "Unsupported distributed type provided. Only DDP and FSDP are supported."
-            # If you want to use DistributedType.DEEPSPEED, you have to run accelerate config before using the model
-            # Also, you have to select zero stage 0 (equivalent to DDP) in order to make the prepare model works
-            # I tried to set different parameters in the kwargs to let default zero 2 stage works, but it didn't work.
-            if accelerator.distributed_type == DistributedType.DEEPSPEED:
-                kwargs = {
-                    "train_micro_batch_size_per_gpu": self.batch_size_per_gpu,
-                    "train_batch_size": self.batch_size_per_gpu * accelerator.num_processes,
-                }
-                AcceleratorState().deepspeed_plugin.deepspeed_config_process(must_match=True, **kwargs)
-                eval_logger.info("Detected that you are using DistributedType.DEEPSPEED. Make sure you run `accelerate config` and set zero stage to 0")
-            if accelerator.distributed_type == DistributedType.FSDP or accelerator.distributed_type == DistributedType.DEEPSPEED:
-                self._model = accelerator.prepare(self.model)
+                lora_cfg_pretrained = LlavaGemmaConfig.from_pretrained(model_path)
+                tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
+                model = LlavaGemmaForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, config=lora_cfg_pretrained, attn_implementation=attn_implementation, **kwargs)
             else:
-                self._model = accelerator.prepare_model(self.model, evaluation_mode=True)
-            self.accelerator = accelerator
-            if self.accelerator.is_local_main_process:
-                eval_logger.info(f"Using {accelerator.num_processes} devices with data parallelism")
-            self._rank = self.accelerator.local_process_index
-            self._world_size = self.accelerator.num_processes
-        elif accelerator.num_processes == 1 and device_map == "auto":
-            eval_logger.info(f"Using {accelerator.num_processes} devices with tensor parallelism")
-            self._rank = 0
-            self._word_size = 1
-        else:
-            eval_logger.info(f"Using single device: {self._device}")
-            if not (load_8bit or load_4bit):
-                self.model.to(self._device)
-            self._rank = 0
-            self._world_size = 1
+                from llava.model.language_model.llava_llama import LlavaConfig
 
-    @property
-    def config(self):
-        # return the associated transformers.AutoConfig for the given pretrained model.
-        return self._config
+                lora_cfg_pretrained = LlavaConfig.from_pretrained(model_path)
+                tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
+                model = LlavaLlamaForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, config=lora_cfg_pretrained, attn_implementation=attn_implementation, **kwargs)
 
-    @property
-    def tokenizer(self):
-        return self._tokenizer
+            token_num, tokem_dim = model.lm_head.out_features, model.lm_head.in_features
+            if model.lm_head.weight.shape[0] != token_num:
+                model.lm_head.weight = torch.nn.Parameter(torch.empty(token_num, tokem_dim, device=model.device, dtype=model.dtype))
+                model.model.embed_tokens.weight = torch.nn.Parameter(torch.empty(token_num, tokem_dim, device=model.device, dtype=model.dtype))
 
-    @property
-    def model(self):
-        # returns the model, unwrapping it if using Accelerate
-        if hasattr(self, "accelerator"):
-            return self.accelerator.unwrap_model(self._model)
-        else:
-            return self._model
-
-    @property
-    def eot_token_id(self):
-        # we use EOT because end of *text* is more accurate for what we're doing than end of *sentence*
-        return self.tokenizer.eos_token_id
-
-    @property
-    def max_length(self):
-        return self._max_length
-
-    def pad_sequence(self, input_ids, batch_first, padding_value):
-        if self.tokenizer.padding_side == "left":
-            input_ids = [torch.flip(_input_ids, [0]) for _input_ids in input_ids]
-        input_ids = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=batch_first, padding_value=padding_value)
-        if self.tokenizer.padding_side == "left":
-            input_ids = torch.flip(input_ids, [1])
-        return input_ids
-
-    @property
-    def batch_size(self):
-        return self.batch_size_per_gpu
-
-    @property
-    def device(self):
-        return self._device
-
-    @property
-    def rank(self):
-        return self._rank
-
-    @property
-    def world_size(self):
-        return self._world_size
-
-    def tok_encode(self, string: str, left_truncate_len=None, add_special_tokens=None) -> List[int]:
-        """ """
-        add_special_tokens = False if add_special_tokens is None else add_special_tokens
-        encoding = self.tokenizer.encode(string, add_special_tokens=add_special_tokens)
-        # left-truncate the encoded context to be at most `left_truncate_len` tokens long
-        if left_truncate_len:
-            encoding = encoding[-left_truncate_len:]
-        return encoding
-
-    def load_image(self, image_path):
-        frame_files = [os.path.join(image_path, f) for f in os.listdir(image_path) if os.path.isfile(os.path.join(image_path, f))]
-        frame_files.sort()  # Ensure the frames are sorted if they are named sequentially
-
-        # TODO: Hard CODE: Determine the indices for uniformly sampling 10 frames
-        num_frames_to_sample = 10
-
-        total_frames = len(frame_files)
-
-        sampled_indices = np.linspace(0, total_frames - 1, num_frames_to_sample, dtype=int)
-
-        # Read and store the sampled frames
-        video = []
-        for idx in sampled_indices:
-            frame_path = frame_files[idx]
-            try:
-                with Image.open(frame_path) as img:
-                    # Convert the PIL image to a numpy array if needed
-                    # frame = np.array(img.convert('RGB'))
-                    frame = img.convert("RGB")
-                    video.append(frame)
-            except IOError:
-                print(f"Failed to read frame at path: {frame_path}")
-        return video
-
-    def load_video(self, video_path, max_frames_num, fps, force_sample=False):
-        if max_frames_num == 0:
-            return np.zeros((1, 336, 336, 3))
-        vr = VideoReader(video_path, ctx=cpu(0), num_threads=1)
-        total_frame_num = len(vr)
-        video_time = total_frame_num / vr.get_avg_fps()
-        fps = round(vr.get_avg_fps() / fps)
-        # frame_idx = [int(total_frame_num / max_frames_num) * i for i in range(max_frames_num)]
-        frame_idx = [i for i in range(0, len(vr), fps)]
-        frame_time = [i / fps for i in frame_idx]
-        if len(frame_idx) > max_frames_num or force_sample:
-            sample_fps = max_frames_num
-            uniform_sampled_frames = np.linspace(0, total_frame_num - 1, sample_fps, dtype=int)
-            frame_idx = uniform_sampled_frames.tolist()
-            frame_time = [i / vr.get_avg_fps() for i in frame_idx]
-        frame_time = ",".join([f"{i:.2f}s" for i in frame_time])
-        spare_frames = vr.get_batch(frame_idx).asnumpy()
-        # import pdb;pdb.set_trace()
-        return spare_frames, frame_time, video_time
-
-    def load_video_index(self, video_path, max_frames_num, fps, doc, force_sample=False):
-        if max_frames_num == 0:
-            return np.zeros((1, 336, 336, 3))
-        vr = VideoReader(video_path, ctx=cpu(0), num_threads=1)
-        total_frame_num = len(vr)
-        video_time = total_frame_num / vr.get_avg_fps()
-        fps = round(vr.get_avg_fps() / fps)
-        top_id = doc['frame_idx']
-        frame_idx = top_id[:max_frames_num]
-        frame_idx = sorted(frame_idx)
-        frame_time = [i / fps for i in frame_idx]
-        if len(frame_idx) < max_frames_num:
-            sample_fps = max_frames_num
-            uniform_sampled_frames = np.linspace(0, total_frame_num - 1, sample_fps, dtype=int)
-            frame_idx = uniform_sampled_frames.tolist()
-            frame_time = [i / vr.get_avg_fps() for i in frame_idx]
-        frame_time = ",".join([f"{i:.2f}s" for i in frame_time])
-        spare_frames = vr.get_batch(frame_idx).asnumpy()
-        # import pdb;pdb.set_trace()
-        return spare_frames, frame_time, video_time
-    
-    
-    def my_load_video(self, video_path, max_frames_num, fps, force_sample=False):
-        if max_frames_num == 0:
-            return np.zeros((1, 336, 336, 3))
-        dirpath = os.path.dirname(video_path)
-        dirname = os.path.dirname(dirpath)
-        video_name = os.path.basename(video_path)
-        video_id = video_name[:-4]
-        pickle_path = os.path.join(dirname, 'video_preprocess', video_id + ".pkl")
-        if os.path.exists(pickle_path) and os.path.getsize(pickle_path) > 0:
-            with open(pickle_path, 'rb') as f:
-                data = pickle.load(f)
-            vr = data['video']
-            all_frame_time = data['frame_time']
-            video_time = data['video_time']
-            vr = torch.tensor(vr)
-        else:
-            raise FileNotFoundError(f"Pickle file not found: {pickle_path}")
-        
-        
-        # fps = round((len(vr) / video_time) / fps)
-        frame_idx = [i for i in range(0, len(vr))]
-        if len(frame_idx) > max_frames_num or force_sample:
-            sample_fps = max_frames_num
-            uniform_sampled_frames = np.linspace(0, len(vr) - 1, sample_fps, dtype=int)
-            frame_idx = uniform_sampled_frames.tolist()
-            frame_time = [all_frame_time[i] for i in frame_idx]
-        frame_time = [all_frame_time[i] for i in frame_idx]
-        frame_time = ",".join([f"{i:.2f}s" for i in frame_time])
-        vr = vr[frame_idx]
-        # import pdb;pdb.set_trace()
-
-        return vr, frame_time, video_time
-
-    def my_load_video_get_index(self, video_path, max_frames_num, fps, doc, force_sample=False):
-        if max_frames_num == 0:
-            return np.zeros((1, 336, 336, 3))
-        dirpath = os.path.dirname(video_path)
-        dirname = os.path.dirname(dirpath)
-        video_name = os.path.basename(video_path)
-        video_id = video_name[:-4]
-        pickle_path = os.path.join(dirname, 'video_preprocess', video_id + ".pkl")
-        if os.path.exists(pickle_path) and os.path.getsize(pickle_path) > 0:
-            with open(pickle_path, 'rb') as f:
-                data = pickle.load(f)
-            vr = data['video']
-            all_frame_time = data['frame_time']
-            video_time = data['video_time']
-            vr = torch.tensor(vr)
-        else:
-            raise FileNotFoundError(f"Pickle file not found: {pickle_path}")
-        top_id = doc['frame_idx']
-        
-        # fps = round((len(vr) / video_time) / fps)
-        fps = round(doc['fps'])
-        # frame_idx = [i for i in range(0, len(vr), fps)]
-        frame_idx = top_id[:max_frames_num]
-        frame_idx = sorted(frame_idx)
-        frame_idx = [int(i/fps) for i in frame_idx]
-        if len(frame_idx) > max_frames_num or force_sample:
-            sample_fps = max_frames_num
-            uniform_sampled_frames = np.linspace(0, len(vr) - 1, sample_fps, dtype=int)
-            frame_idx = uniform_sampled_frames.tolist()
-            frame_time = [all_frame_time[i] for i in frame_idx]
-        frame_time = [all_frame_time[i] for i in frame_idx]
-        frame_time = ",".join([f"{i:.2f}s" for i in frame_time])
-        vr = vr[frame_idx]
-        # import pdb;pdb.set_trace()
-
-        return vr, frame_time, video_time
-
-    def tok_decode(self, tokens):
-        return self.tokenizer.decode(tokens)
-
-    def loglikelihood(self, requests: List[Instance]) -> List[Tuple[float, bool]]:
-        res = []
-        pbar = tqdm(total=len(requests), disable=(self.rank != 0), desc="Model Responding")
-
-        for contexts, doc_to_target, doc_to_visual, doc_id, task, split in [reg.args for reg in requests]:
-            # encode, pad, and truncate contexts for this batch
-            if type(doc_to_target) == str:
-                continuation = doc_to_target
+            rank0_print("Loading additional LLaVA weights...")
+            if os.path.exists(os.path.join(model_path, "non_lora_trainables.bin")):
+                non_lora_trainables = torch.load(os.path.join(model_path, "non_lora_trainables.bin"), map_location="cpu")
             else:
-                continuation = doc_to_target(self.task_dict[task][split][doc_id])
-            visuals = [doc_to_visual(self.task_dict[task][split][doc_id])]
-            visuals = self.flatten(visuals)
-            videos = []
-            for visual in visuals:
-                video, frame_time, video_time = self.load_video(visual, self.max_frames_num, self.fps, force_sample=self.force_sample)
-                video = self._image_processor.preprocess(video, return_tensors="pt")["pixel_values"].cuda()
-                if self.torch_dtype == "bfloat16":
-                    video = video.bfloat16()
+                # this is probably from HF Hub
+                from huggingface_hub import hf_hub_download
+
+                def load_from_hf(repo_id, filename, subfolder=None):
+                    cache_file = hf_hub_download(repo_id=repo_id, filename=filename, subfolder=subfolder)
+                    return torch.load(cache_file, map_location="cpu")
+
+                non_lora_trainables = load_from_hf(model_path, "non_lora_trainables.bin")
+            non_lora_trainables = {(k[11:] if k.startswith("base_model.") else k): v for k, v in non_lora_trainables.items()}
+            if any(k.startswith("model.model.") for k in non_lora_trainables):
+                non_lora_trainables = {(k[6:] if k.startswith("model.") else k): v for k, v in non_lora_trainables.items()}
+            model.load_state_dict(non_lora_trainables, strict=False)
+
+            from peft import PeftModel
+
+            rank0_print("Loading LoRA weights...")
+            model = PeftModel.from_pretrained(model, model_path)
+            rank0_print("Merging LoRA weights...")
+            model = model.merge_and_unload()
+            rank0_print("Model is loaded...")
+        elif model_base is not None:  # this may be mm projector only, loading projector with preset language mdoel
+            rank0_print(f"Loading LLaVA from base model {model_base}...")
+            if "mixtral" in model_name.lower():
+                tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
+                cfg_pretrained = AutoConfig.from_pretrained(model_path)
+                model = LlavaMixtralForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, config=cfg_pretrained, attn_implementation=attn_implementation, **kwargs)
+            elif "mistral" in model_name.lower() or "zephyr" in model_name.lower():
+                tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
+                cfg_pretrained = AutoConfig.from_pretrained(model_path)
+                model = LlavaMistralForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, config=cfg_pretrained, attn_implementation=attn_implementation, **kwargs)
+            elif "gemma" in model_name.lower():
+                tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
+                cfg_pretrained = AutoConfig.from_pretrained(model_path)
+                model = LlavaGemmaForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, config=cfg_pretrained, attn_implementation=attn_implementation, **kwargs)
+            elif (
+                "wizardlm-2" in model_name.lower()
+                and "vicuna" in model_name.lower()
+                or "llama" in model_name.lower()
+                or "yi" in model_name.lower()
+                or "nous-hermes" in model_name.lower()
+                or "llava-v1.6-34b" in model_name.lower()
+                or "llava-v1.5" in model_name.lower()
+            ):
+                from llava.model.language_model.llava_llama import LlavaConfig
+
+                tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
+                if customized_config is None:
+                    llava_cfg = LlavaConfig.from_pretrained(model_path)
+                    if "v1.5" in model_name.lower():
+                        llava_cfg.delay_load = True  # a workaround for correctly loading v1.5 models
                 else:
-                    video = video.half()
-                videos.append(video)
+                    llava_cfg = customized_config
 
-            qs = contexts
-            if self.model.config.mm_use_im_start_end:
-                qs = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN + "\n" + qs
+                tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
+                llava_cfg = LlavaConfig.from_pretrained(model_path)
+                model = LlavaLlamaForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, config=llava_cfg, **kwargs)
             else:
-                qs = DEFAULT_IMAGE_TOKEN + "\n" + qs
+                raise ValueError(f"Model {model_name} not supported")
 
-            conv = conv_templates[self.conv_template].copy()
-            conv.append_message(conv.roles[0], qs)
-            conv.append_message(conv.roles[1], None)
-            prompt = conv.get_prompt()
+            mm_projector_weights = torch.load(os.path.join(model_path, "mm_projector.bin"), map_location="cpu")
+            mm_projector_weights = {k: v.to(torch.float16) for k, v in mm_projector_weights.items()}
+            model.load_state_dict(mm_projector_weights, strict=False)
+        else:
+            rank0_print(f"Loaded LLaVA model: {model_path}")
+            if "mixtral" in model_name.lower():
+                from llava.model.language_model.llava_mixtral import LlavaMixtralConfig
 
-            contxt_id = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0).to(self.device)
-
-            conv = conv_templates[self.conv_template].copy()
-            conv.append_message(conv.roles[0], qs)
-            conv.append_message(conv.roles[1], continuation)
-            prompt = conv.get_prompt()
-
-            input_ids = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0).cuda()
-            attention_masks = input_ids.ne(self.tokenizer.pad_token_id).long().cuda()
-
-            labels = input_ids.clone()
-            # Context part no need to calculate for loss
-            labels[0, : contxt_id.shape[1]] = -100
-
-            with torch.inference_mode():
-                outputs = self.model(input_ids=input_ids, labels=labels, images=videos, modalities="video")
-
-            loss = outputs["loss"]
-            # loss = torch.exp(loss)
-            logits = outputs["logits"]
-            greedy_tokens = logits.argmax(dim=-1)
-            cont_toks = input_ids[:, contxt_id.shape[1] :]  # [1, seq]
-            greedy_tokens = greedy_tokens[:, contxt_id.shape[1] : input_ids.shape[1]]  # [1, seq]
-            max_equal = (greedy_tokens == cont_toks).all()
-            res.append((float(loss.item()), bool(max_equal)))
-            pbar.update(1)
-        pbar.close()
-        return res
-
-    def flatten(self, input):
-        new_list = []
-        for i in input:
-            for j in i:
-                new_list.append(j)
-        return new_list
-
-    def generate_until(self, requests) -> List[str]:
-        res = []
-        pbar = tqdm(total=len(requests), disable=(self.rank != 0), desc="Model Responding")
-
-        for contexts, gen_kwargs, doc_to_visual, doc_id, task, split in [reg.args for reg in requests]:
-            # if self.task_dict[task][split][doc_id]["duration"] != "short":
-            # # if doc_id != 112:
-            #     # import pdb;pdb.set_trace()
-            #     res.append("A")
-            #     pbar.update(1)
-            #     continue
-            # encode, pad, and truncate contexts for this batch
-            # import pdb;pdb.set_trace()
-            visuals = doc_to_visual(self.task_dict[task][split][doc_id])
-            # visuals = [visuals]
-            # visuals = self.flatten(visuals)
-            videos = []
-            try:
-                # for visual in visuals:
-                if len(visuals) == 1:
-                    if self.video_decode_backend == "decord":
-
-                        if self.use_topk:
-                            video, frame_time, video_time = self.load_video_index(visuals[0], self.max_frames_num, self.fps, self.task_dict[task][split][doc_id], force_sample=self.force_sample)
-                        else:
-                            video, frame_time, video_time = self.load_video(visuals[0], self.max_frames_num, self.fps, force_sample=self.force_sample)
-
-
-                    elif self.video_decode_backend == "pyav":
-                        video, frame_time, video_time = read_video_pyav(visuals[0], self.max_frames_num, self.fps, force_sample=self.force_sample)
-                    elif self.video_decode_backend == "image":
-                        video = self.load_image(visuals[0])
+                tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
+                if customized_config is None:
+                    llava_cfg = LlavaMixtralConfig.from_pretrained(model_path)
                 else:
-                    if task == "seedbench":
-                        video = visuals
-                        frame_time = "1.00s"
-                        video_time = 1
-                    elif "mvbench" in task:
-                        # video = visuals
-                        # Reference: https://github.com/jayleicn/TVQA/blob/dfb0e5fe4582efca574dfddfeafd1008db3b33ef/data/README.md?plain=1#L50C34-L50C60
-                        fps = 3
-                        video_time = len(visuals) / fps
-                        sampled_indices = np.linspace(0, len(visuals) - 1, self.max_frames_num, dtype=int)
-                        frame_idx = sampled_indices.tolist()
-                        frame_time = [i / fps for i in frame_idx]
-                        frame_time = ",".join([f"{i:.2f}s" for i in frame_time])
-                        video = [visuals[i] for i in frame_idx]
-                    elif "longvideobench" in task:
-                        video = visuals
+                    llava_cfg = customized_config
 
-                if isinstance(video, torch.Tensor):
-                    video = video.cuda()
-                else:
-                    video = self._image_processor.preprocess(video, return_tensors="pt")["pixel_values"].cuda()
-                if self.torch_dtype == "bfloat16":
-                    video = video.bfloat16()
-                else:
-                    video = video.half()
-                videos.append(video)
-            except Exception as e:
-                # import pdb;pdb.set_trace()
-                eval_logger.info(f"{e}")
-                eval_logger.info(f"Video {visuals} can not load, check the source")
-                video_path = "\n".join(visuals)
-                res.append(f"Video {video_path} can not load, check the source")
-                pbar.update(1)
-                continue
+                if overwrite_config is not None:
+                    rank0_print(f"Overwriting config with {overwrite_config}")
+                    for k, v in overwrite_config.items():
+                        setattr(llava_cfg, k, v)
 
-            qs = contexts
-            # import pdb;pdb.set_trace()
-            if self.add_time_instruction:
-                time_instruciton = f"The video lasts for {video_time:.2f} seconds, and {len(video)} frames are uniformly sampled from it. These frames are located at {frame_time}.Please answer the following questions related to this video."
-                qs = f"{time_instruciton}\n{qs}"
-            if self.model.config.mm_use_im_start_end:
-                qs = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN + "\n" + qs
+                tokenizer = AutoTokenizer.from_pretrained(model_path)
+                model = LlavaMixtralForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, attn_implementation=attn_implementation, config=llava_cfg, **kwargs)
+
+            elif "mistral" in model_name.lower() or "zephyr" in model_name.lower():
+                tokenizer = AutoTokenizer.from_pretrained(model_path)
+                model = LlavaMistralForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, attn_implementation=attn_implementation, **kwargs)
+            elif (
+                "wizardlm-2" in model_name.lower()
+                and "vicuna" in model_name.lower()
+                or "llama" in model_name.lower()
+                or "yi" in model_name.lower()
+                or "nous-hermes" in model_name.lower()
+                or "llava-v1.6-34b" in model_name.lower()
+                or "llava-v1.5" in model_name.lower()
+            ):
+                from llava.model.language_model.llava_llama import LlavaConfig
+
+                tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
+                if customized_config is None:
+                    llava_cfg = LlavaConfig.from_pretrained(model_path)
+                    if "v1.5" in model_name.lower():
+                        llava_cfg.delay_load = True  # a workaround for correctly loading v1.5 models
+                else:
+                    llava_cfg = customized_config
+
+                if overwrite_config is not None:
+                    rank0_print(f"Overwriting config with {overwrite_config}")
+                    for k, v in overwrite_config.items():
+                        setattr(llava_cfg, k, v)
+
+                model = LlavaLlamaForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, attn_implementation=attn_implementation, config=llava_cfg, **kwargs)
+
+            elif "qwen" in model_name.lower() or "quyen" in model_name.lower():
+                tokenizer = AutoTokenizer.from_pretrained(model_path)
+                if "moe" in model_name.lower() or "A14B" in model_name.lower():
+                    from llava.model.language_model.llava_qwen_moe import LlavaQwenMoeConfig
+                    if overwrite_config is not None:
+                        llava_cfg = LlavaQwenMoeConfig.from_pretrained(model_path)
+                        rank0_print(f"Overwriting config with {overwrite_config}")
+                        for k, v in overwrite_config.items():
+                            setattr(llava_cfg, k, v)
+                        model = LlavaQwenMoeForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, attn_implementation=attn_implementation, config=llava_cfg, **kwargs)
+                    else:
+                        model = LlavaQwenMoeForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, attn_implementation=attn_implementation, **kwargs)
+
+                else:
+                    from llava.model.language_model.llava_qwen import LlavaQwenConfig
+                    if overwrite_config is not None:
+                        llava_cfg = LlavaQwenConfig.from_pretrained(model_path)
+                        rank0_print(f"Overwriting config with {overwrite_config}")
+                        for k, v in overwrite_config.items():
+                            setattr(llava_cfg, k, v)
+                        model = LlavaQwenForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, attn_implementation=attn_implementation, config=llava_cfg, **kwargs)
+                    else:
+                        model = LlavaQwenForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, attn_implementation=attn_implementation, **kwargs)
+
+            elif "gemma" in model_name.lower():
+                tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
+                cfg_pretrained = AutoConfig.from_pretrained(model_path)
+                model = LlavaGemmaForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, config=cfg_pretrained, attn_implementation=attn_implementation, **kwargs)
             else:
-                qs = DEFAULT_IMAGE_TOKEN * len(videos) + "\n" + qs
+                try:
+                    from llava.model.language_model.llava_llama import LlavaConfig
 
-            # This is much safer for llama3, as we now have some object type in it
-            if "llama_3" in self.conv_template:
-                conv = copy.deepcopy(conv_templates[self.conv_template])
+                    tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
+                    if customized_config is None:
+                        llava_cfg = LlavaConfig.from_pretrained(model_path)
+                        if "v1.5" in model_path.lower():
+                            llava_cfg.delay_load = True  # a workaround for correctly loading v1.5 models
+                    else:
+                        llava_cfg = customized_config
+
+                    if overwrite_config is not None:
+                        rank0_print(f"Overwriting config with {overwrite_config}")
+                        for k, v in overwrite_config.items():
+                            setattr(llava_cfg, k, v)
+                    model = LlavaLlamaForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, attn_implementation=attn_implementation, config=llava_cfg, **kwargs)
+                except:
+                    raise ValueError(f"Model {model_name} not supported")
+
+    else:
+        # Load language model
+        if model_base is not None:
+            # PEFT model
+            from peft import PeftModel
+
+            tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
+            model = AutoModelForCausalLM.from_pretrained(model_base, torch_dtype=torch.float16, low_cpu_mem_usage=True, device_map="auto")
+            print(f"Loading LoRA weights from {model_path}")
+            model = PeftModel.from_pretrained(model, model_path)
+            print(f"Merging weights")
+            model = model.merge_and_unload()
+            print("Convert to FP16...")
+            model.to(torch.float16)
+        else:
+            use_fast = False
+            if "mpt" in model_name.lower().replace("prompt", ""):
+                tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=True)
+                model = AutoModelForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, trust_remote_code=True, **kwargs)
             else:
-                conv = conv_templates[self.conv_template].copy()
+                tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
+                model = AutoModelForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, **kwargs)
 
-            conv.append_message(conv.roles[0], qs)
-            conv.append_message(conv.roles[1], None)
-            prompt = conv.get_prompt()
+    rank0_print(f"Model Class: {model.__class__.__name__}")
+    image_processor = None
 
-            input_ids = tokenizer_image_token(prompt, self.tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0).cuda()
-            pad_token_ids = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else self.tokenizer.eos_token_id
-            if "llama_3" in self.conv_template:
-                pad_token_ids = 0  # lmms-lab/llama3-llava-8b is trained on this pad token id. You may need to customize this for other models.
-            attention_masks = input_ids.ne(pad_token_ids).long().cuda()
+    if "llava" in model_name.lower() or is_multimodal:
+        mm_use_im_start_end = getattr(model.config, "mm_use_im_start_end", False)
+        mm_use_im_patch_token = getattr(model.config, "mm_use_im_patch_token", True)
+        if mm_use_im_patch_token:
+            tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
+        if mm_use_im_start_end:
+            tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
+        model.resize_token_embeddings(len(tokenizer))
 
-            stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
-            keywords = [stop_str]
+        vision_tower = model.get_vision_tower()
+        if not vision_tower.is_loaded:
+            vision_tower.load_model(device_map=device_map)
+        if device_map != "auto":
+            vision_tower.to(device="cuda", dtype=torch.float16)
+        image_processor = vision_tower.image_processor
 
-            stopping_criteria = KeywordsStoppingCriteria(keywords, self.tokenizer, input_ids)
+    if hasattr(model.config, "max_sequence_length"):
+        context_len = model.config.max_sequence_length
+    elif hasattr(model.config, "max_position_embeddings"):
+        context_len = model.config.max_position_embeddings
+    elif hasattr(model.config, "tokenizer_model_max_length"):
+        context_len = model.config.tokenizer_model_max_length
+    else:
+        context_len = 2048
 
-            cur_prompt = qs
-
-            if "max_new_tokens" not in gen_kwargs:
-                gen_kwargs["max_new_tokens"] = 1024
-            if "temperature" not in gen_kwargs:
-                gen_kwargs["temperature"] = 0
-            if "top_p" not in gen_kwargs:
-                gen_kwargs["top_p"] = None
-            if "num_beams" not in gen_kwargs:
-                gen_kwargs["num_beams"] = 1
-
-            # import pdb;pdb.set_trace()
-            with torch.inference_mode():
-                output_ids = self.model.generate(
-                    inputs=input_ids,
-                    images=videos,
-                    attention_mask=attention_masks,
-                    modalities="video",
-                    use_cache=self.use_cache,
-                    stopping_criteria=[stopping_criteria],
-                    do_sample=True if gen_kwargs["temperature"] > 0 else False,
-                    temperature=gen_kwargs["temperature"],
-                    top_p=gen_kwargs["top_p"],
-                    num_beams=gen_kwargs["num_beams"],
-                    max_new_tokens=gen_kwargs["max_new_tokens"],
-                )
-                # output_ids_2 = self.model.generate(inputs=input_ids, images=videos, attention_mask=attention_masks, modalities="video", do_sample=False, max_new_tokens=50,stopping_criteria=[stopping_criteria])
-                # output_ids = self.model.generate(inputs=input_ids, images=videos, attention_mask=attention_masks, modalities="video", do_sample=True, temperature=0.2, max_new_tokens=50,use_cache=True)
-
-            outputs = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
-            eval_logger.debug(f"Question: {cur_prompt}")
-            eval_logger.debug(f"Answer: {outputs}")
-            # import pdb;pdb.set_trace()
-            res.append(outputs)
-            pbar.update(1)
-        return res
-
-    def generate_until_multi_round(self, requests) -> List[str]:
-        raise NotImplementedError("TODO: Implement multi-round generation for LLaVAVid")
+    return tokenizer, model, image_processor, context_len
