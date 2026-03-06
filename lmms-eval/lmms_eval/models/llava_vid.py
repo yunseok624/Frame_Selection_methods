@@ -176,7 +176,7 @@ class LlavaVid(lmms):
                 pretrained, None, self.model_name, load_8bit=True, device_map=self.device_map, torch_dtype=self.torch_dtype, overwrite_config=overwrite_config, attn_implementation=attn_implementation
             )
         else:
-            self._tokenizer, self._model, self._image_processor, self._max_length = load_pretrained_model(pretrained, None, self.model_name, load_8bit=True, device_map=self.device_map, torch_dtype=self.torch_dtype, attn_implementation=attn_implementation)
+            self._tokenizer, self._model, self._image_processor, self._max_length = load_pretrained_model(pretrained, None, self.model_name, load_8bit=True, device_map={"": 0}, torch_dtype=self.torch_dtype, attn_implementation=attn_implementation)
 
         self._config = self._model.config
         # print(attn_implementation)
