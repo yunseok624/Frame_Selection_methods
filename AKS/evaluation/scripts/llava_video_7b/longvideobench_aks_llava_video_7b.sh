@@ -9,7 +9,7 @@ python ./evaluation/change_score.py \
     --dataset_name $dataset_name \
     --num_frames $frame_num
 
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 accelerate launch --num_processes 8 --main_process_port 12345 -m lmms_eval \
+CUDA_VISIBLE_DEVICES=0 accelerate launch --num_processes 8 --main_process_port 12345 -m lmms_eval \
     --model llava_vid \
     --model_args pretrained=/content/drive/MyDrive/checkpoints/LLaVA-NeXT-Video-7B-Qwen2,conv_template=chatml_direct,video_decode_backend=decord,max_frames_num=64,overwrite=False,use_topk=True\
     --tasks longvideobench_val_v \
