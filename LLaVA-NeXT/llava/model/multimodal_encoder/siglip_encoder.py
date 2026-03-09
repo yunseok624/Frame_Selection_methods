@@ -170,7 +170,8 @@ class SigLipVisionEmbeddings(nn.Module):
         patch_embeds = self.patch_embedding(pixel_values)  # shape = [*, width, grid, grid]
         embeddings = patch_embeds.flatten(2).transpose(1, 2)
 
-        embeddings = embeddings + self.position_embedding(self.position_ids)
+        # embeddings = embeddings + self.position_embedding(self.position_ids)
+        embeddings = embeddings + self.position_embedding(self.position_ids.to(device=embeddings.device))
         return embeddings
 
 
