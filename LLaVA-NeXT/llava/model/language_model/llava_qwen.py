@@ -131,6 +131,8 @@ class LlavaQwenForCausalLM(Qwen2ForCausalLM, LlavaMetaForCausalLM):
             (inputs, position_ids, attention_mask, _, inputs_embeds, _) = self.prepare_inputs_labels_for_multimodal(inputs, position_ids, attention_mask, None, None, images, modalities, image_sizes=image_sizes)
         else:
             inputs_embeds = self.get_model().embed_tokens(inputs)
+        
+        self.model.to(inputs_embeds.device)
 
         # return super().generate(position_ids=position_ids, attention_mask=attention_mask, inputs_embeds=inputs_embeds, **kwargs)
         return super().generate(position_ids=position_ids.to(inputs_embeds.device) if position_ids is not None else None, attention_mask=attention_mask, inputs_embeds=inputs_embeds, **kwargs)
