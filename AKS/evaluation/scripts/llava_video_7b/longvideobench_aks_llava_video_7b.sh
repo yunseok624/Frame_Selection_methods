@@ -16,4 +16,4 @@ CUDA_VISIBLE_DEVICES=0 accelerate launch --num_processes 8 --main_process_port 1
     --batch_size 1 \
     --log_samples \
     --log_samples_suffix llavavid_7b_qwen_lvb_v \
-    --output_path /content/drive/MyDrive/results/${score_type}_${frame_num}
+    --output_path /content/drive/MyDrive/results/${dataset_name}_${score_type}_${frame_num}
