@@ -1,4 +1,4 @@
-dataset_path: /content/drive/MyDrive/datasets/longvideobench
+dataset_path: ./datasets/longvideobench
 dataset_kwargs:
   data_files: {"validation" : lvb_val.json}
   token: False
