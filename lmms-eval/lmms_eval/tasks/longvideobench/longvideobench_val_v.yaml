@@ -1,5 +1,5 @@
 # dataset_path: ./datasets/longvideobench
-dataset_paht: /content/drive/MyDrive/datasets/longvideobench
+dataset_path: /content/drive/MyDrive/datasets/longvideobench
 dataset_kwargs:
   # data_files: {"validation" : include_frame_idx.json}
   data_files: {"validation" : "/content/AKS/datasets/frame_idx/longvideobench/include_frame_idx.json"}
