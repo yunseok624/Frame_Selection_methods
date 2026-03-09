@@ -2,7 +2,7 @@
 dataset_path: /content/drive/MyDrive/datasets/longvideobench
 dataset_kwargs:
   # data_files: {"validation" : include_frame_idx.json}
-  data_files: {"validation" : "/content/AKS/datasets/frame_idx/longvideobench/include_frame_idx.json"}
+  data_files: {"validation" : "/content/Frame_Selection_methods/AKS/datasets/longvideobench/include_frame_idx.json"}
   token: False
   cache_dir: longvideobench
   video: False
