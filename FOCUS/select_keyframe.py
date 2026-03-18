@@ -69,7 +69,7 @@ def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, ba
 # Ray Worker Functions
 # ============================================================================
 
-@ray.remote(num_gpus=1)
+@ray.remote(num_gpus=2)
 def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict):
     """Ray worker for distributed processing."""
     worker_start_time = time.time()
