@@ -268,6 +268,7 @@ class Qwen2_VL(lmms):
                 num_beams=gen_kwargs["num_beams"],
                 max_new_tokens=gen_kwargs["max_new_tokens"],
                 use_cache=self.use_cache,
+                cache_implementation="quantized"
             )
 
             generated_ids_trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, cont)]
