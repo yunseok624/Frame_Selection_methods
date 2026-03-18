@@ -7,17 +7,16 @@ Welcome! This repository is dedicated to exploring and benchmarking various fram
 ## Results
 
 <table>
-  <thead>
-    <tr>
-      <th><div align="center"><br>MLLM</br></div></th>
-      <th><div align="center"><br>Method</br></div></th>
-      <th><div align="center"><br>Frames</br></div></th>
-      <th><div align="center"><br>LLM param</br></div></th>
-      <th><div align="center"><br>LVB</br></div></th>
-      <th><div align="center"><br>V-MME</br></div></th>
-      <th><div align="center"><br>MLVU</br></div></th>
-    </tr>
-  </thead>
+  <thead> <tr>
+    <th style="padding: 8px; text-align: center;">MLLM</th>
+    <th style="padding: 8px; text-align: center;">Method</th>
+    <th style="padding: 8px; text-align: center;">Frames</th>
+    <th style="padding: 8px; text-align: center;">LLM param</th>
+    <th style="padding: 8px; text-align: center;">LVB</th>
+    <th style="padding: 8px; text-align: center;">V-MME</th>
+    <th style="padding: 8px; text-align: center;">MLVU</th>
+  </tr>
+</thead>
   <tbody>
     <tr>
       <td rowspan="6" align="center"><b>Qwen2-VL</b></td>
