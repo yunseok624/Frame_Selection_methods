@@ -16,7 +16,7 @@ from typing import Optional, List, Tuple, Dict
 import numpy as np
 import torch
 import ray
-from decord import VideoReader, cpu, cuda
+from decord import VideoReader, cpu, gpu
 from PIL import Image
 from tqdm import tqdm
 
@@ -69,7 +69,7 @@ def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, ba
 # Ray Worker Functions
 # ============================================================================
 
-@ray.remote(num_gpus=2)
+@ray.remote(num_gpus=1)
 def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict):
     """Ray worker for distributed processing."""
     worker_start_time = time.time()
@@ -79,7 +79,12 @@ def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict
     for k, v in args_dict.items():
         setattr(args, k, v)
 
-    device = 'cuda:0'
+    # device = 'cuda:0'
+    # Ray가 현재 프로세스에 할당한 GPU ID를 가져옴
+    assigned_gpus = ray.get_gpu_ids()
+    gpu_id = assigned_gpus[0] if assigned_gpus else 0
+    device = f'cuda:{gpu_id}'
+
     full_output_dir = os.path.join('./selected_frames', args.dataset_name, args.output_dir)
     os.makedirs(full_output_dir, exist_ok=True)
     output_json = os.path.join(full_output_dir, f"{output_json_base_prefix}_rank{dp_rank}.json")
@@ -117,7 +122,8 @@ def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict
                 }
             else:
                 # vr = VideoReader(video_file, ctx=cpu(0))
-                vr = VideoReader(video_file, ctx=cuda(0))
+                # VideoReader 선언 시 해당 GPU의 NVDEC 사용
+                vr = VideoReader(video_file, ctx=gpu(gpu_id), num_threads=2)
                 fps = float(vr.get_avg_fps())
                 total_frames = len(vr)
                 video_duration = float(total_frames) / max(1.0, fps)
