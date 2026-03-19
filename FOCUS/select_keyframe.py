@@ -281,15 +281,12 @@ def parse_arguments():
                         help='support longvideobench and videomme')
     parser.add_argument('--dataset_path', type=str, default='./datasets/longvideobench',
                         help='path to the dataset root')
-    parser.add_argument('--start_idx', type=int, default=0, help='시작 비디오 인덱스')
-    parser.add_argument('--end_idx', type=int, default=None, help='끝 비디오 인덱스 (None이면 끝까지)')
     parser.add_argument('--output_dir', type=str, default='focus_clip',
                         help='algorithm name folder under ./selected_frames/{dataset_name}/')
     parser.add_argument('--num_keyframes', type=int, default=64,
                         help='number of keyframes to select')
     parser.add_argument('--batch_size', type=int, default=32,
                         help='batch size for CLIP processing')
-
 
     # Hybrid selection parameters
     parser.add_argument('--top_ratio', type=float, default=0.2,
@@ -355,13 +352,9 @@ def main():
     DP_SIZE = gpu_count if gpu_count > 1 else 1
     print(f"Using {DP_SIZE} workers")
 
-    # time_stamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-    # output_json_base_prefix = f'keyframe_focus_{args.dataset_name}_{time_stamp}'
     time_stamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-    if args.end_idx:
-      output_json_base_prefix = f'keyframe_focus_{args.dataset_name}_{args.start_idx}_{args.end_idx}_{time_stamp}'
-    else:
-      output_json_base_prefix = f'keyframe_focus_{args.dataset_name}_{args.start_idx}_{time_stamp}'
+    output_json_base_prefix = f'keyframe_focus_{args.dataset_name}_{time_stamp}'
+
     output_dir = os.path.join('./selected_frames', args.dataset_name, args.output_dir)
     os.makedirs(output_dir, exist_ok=True)
     merged_output_path = os.path.join(output_dir, 'selected_frames.json')
@@ -378,14 +371,7 @@ def main():
         raise OSError('the label file does not exist')
     with open(label_path, 'r') as f:
         datas = json.load(f)
-    # print(f"Total videos to process: {len(datas)}")
-
-    # Data slicing
-    start = args.start_idx
-    end = args.end_idx if args.end_idx is not None else len(datas)
-    datas = datas[start:end]
-
-    print(f"Processing videos from {start} to {end} (Total: {len(datas)})")
+    print(f"Total videos to process: {len(datas)}")
 
     total = len(datas)
     per_rank = (total + DP_SIZE - 1) // DP_SIZE

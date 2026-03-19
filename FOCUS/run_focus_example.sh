@@ -8,11 +8,9 @@ echo "========================================================"
 
 # Set default parameters
 DATASET_NAME="longvideobench"
-DATASET_PATH="/content/drive/MyDrive/datasets/longvideobench"
-OUTPUT_DIR="/content/drive/MyDrive/extraction_result/focus_longvideobench"
-START=0
-END=50
-NUM_KEYFRAMES=64
+DATASET_PATH="/kaggle/input/datasets/yunseok624/longvideobench"
+OUTPUT_DIR="/kaggle/working/focus_longvideobench_32"
+NUM_KEYFRAMES=32
 BATCH_SIZE=32
 CLIP_MODEL="base"
 
@@ -68,8 +66,6 @@ python select_keyframe.py \
     --dataset_name "$DATASET_NAME" \
     --dataset_path "$DATASET_PATH" \
     --output_dir "$OUTPUT_DIR" \
-    --start_idx "$START" \
-    --end_idx "$END" \
     --num_keyframes "$NUM_KEYFRAMES" \
     --batch_size "$BATCH_SIZE" \
     --coarse_every_sec "$COARSE_EVERY_SEC" \
