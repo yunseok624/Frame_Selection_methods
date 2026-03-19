@@ -120,7 +120,6 @@ def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict
                     "video_metadata": {"total_frames": 0, "fps": 0.0, "duration_seconds": 0.0, "budget_used": 0}
                 }
             else:
-                # vr = VideoReader(video_file, ctx=cpu(0))
                 vr = VideoReader(video_file, ctx=gpu(gpu_id), num_threads=2)
                 fps = float(vr.get_avg_fps())
                 total_frames = len(vr)
