@@ -16,7 +16,7 @@ from typing import Optional, List, Tuple, Dict
 import numpy as np
 import torch
 import ray
-from decord import VideoReader, cpu
+from decord import VideoReader, cpu, cuda
 from PIL import Image
 from tqdm import tqdm
 
@@ -116,7 +116,8 @@ def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict
                     "video_metadata": {"total_frames": 0, "fps": 0.0, "duration_seconds": 0.0, "budget_used": 0}
                 }
             else:
-                vr = VideoReader(video_file, ctx=cpu(0))
+                # vr = VideoReader(video_file, ctx=cpu(0))
+                vr = VideoReader(video_file, ctx=cuda(0))
                 fps = float(vr.get_avg_fps())
                 total_frames = len(vr)
                 video_duration = float(total_frames) / max(1.0, fps)
