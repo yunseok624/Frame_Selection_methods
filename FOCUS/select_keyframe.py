@@ -79,11 +79,10 @@ def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict
     for k, v in args_dict.items():
         setattr(args, k, v)
 
-    # device = 'cuda:0'
-    # Ray가 현재 프로세스에 할당한 GPU ID를 가져옴
-    assigned_gpus = ray.get_gpu_ids()
-    gpu_id = assigned_gpus[0] if assigned_gpus else 0
-    device = f'cuda:{gpu_id}'
+    # Ray automatically sets CUDA_VISIBLE_DEVICES for each worker.
+    # The assigned GPU is always accessible as index 0 within the worker process.
+    device = 'cuda:0'
+    gpu_id = 0
 
     full_output_dir = os.path.join('./selected_frames', args.dataset_name, args.output_dir)
     os.makedirs(full_output_dir, exist_ok=True)
@@ -122,7 +121,6 @@ def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict
                 }
             else:
                 # vr = VideoReader(video_file, ctx=cpu(0))
-                # VideoReader 선언 시 해당 GPU의 NVDEC 사용
                 vr = VideoReader(video_file, ctx=gpu(gpu_id), num_threads=2)
                 fps = float(vr.get_avg_fps())
                 total_frames = len(vr)
