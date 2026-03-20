@@ -16,6 +16,7 @@ from typing import Optional, List, Tuple, Dict
 import numpy as np
 import torch
 import ray
+import decord
 from decord import VideoReader, cpu, gpu
 from PIL import Image
 from tqdm import tqdm
@@ -29,38 +30,97 @@ from focus import FOCUS
 # Video Processing Functions
 # ============================================================================
 
+# def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, batch_size: int):
+#     """Create a CLIP-based similarity function for FOCUS algorithm."""
+#     def similarity_fn(video: VideoReader, query: str, fram_indices: List[int]) -> List[float]:
+#         similarities = []
+
+#         for i in range(0, len(fram_indices), batch_size):
+#             batch_indices = fram_indices[i:i+batch_size]
+#             batch_images = []
+#             for idx in batch_indices:
+#                 raw_image = vr[idx].asnumpy()
+#                 raw_image = Image.fromarray(raw_image)
+#                 batch_images.append(raw_image)
+            
+#             if batch_images:
+#                 # Process text and images using CLIP Processor
+#                 inputs = processor(
+#                     text=[query],
+#                     images=batch_images,
+#                     return_tensors="pt",
+#                     padding=True
+#                 ).to(device)
+
+#                 with torch.no_grad():
+#                     outputs = model(**inputs)
+#                     # CLIP outputs logits_per_image representing cosine similarity * logit_scale
+#                     batch_similarities = outputs.logits_per_image[:, 0].cpu().tolist()
+
+#                     # Handle case where batch_size is 1 (tolist() returns a float instead of list)
+#                     if isinstance(batch_similarities, float):
+#                         batch_similarities = [batch_similarities]
+                    
+#                     similarities.extend(batch_similarities)
+#         return similarities
+    
+#     return similarity_fn
+
+# 전역 설정: decord가 항상 PyTorch 텐서를 반환하도록 설정 (데이터 복사 방지)
+decord.bridge.set_bridge('torch')
+
 def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, batch_size: int):
     """Create a CLIP-based similarity function for FOCUS algorithm."""
-    def similarity_fn(video: VideoReader, query: str, fram_indices: List[int]) -> List[float]:
+    def similarity_fn(video: VideoReader, query: str, frame_indices: List[int]) -> List[float]:
         similarities = []
 
-        for i in range(0, len(fram_indices), batch_size):
-            batch_indices = fram_indices[i:i+batch_size]
-            batch_images = []
-            for idx in batch_indices:
-                raw_image = vr[idx].asnumpy()
-                raw_image = Image.fromarray(raw_image)
-                batch_images.append(raw_image)
-            
-            if batch_images:
-                # Process text and images using CLIP Processor
-                inputs = processor(
-                    text=[query],
-                    images=batch_images,
-                    return_tensors="pt",
-                    padding=True
-                ).to(device)
+        # 텍스트 토큰화 (GPU로 이동)
+        text_inputs = processor(text=[query], return_tensors="pt", padding=True).to(device)
+        with torch.no_grad():
+            text_features = model.get_text_features(**text_inputs)
+            text_features /= text_features.norm(dim=-1, keepdim=True)
+        
+        for i in range(0, len(frame_indices), batch_size):
+            batch_indices = frame_indices[i:i+batch_size]
 
-                with torch.no_grad():
-                    outputs = model(**inputs)
-                    # CLIP outputs logits_per_image representing cosine similarity * logit_scale
-                    batch_similarities = outputs.logits_per_image[:, 0].cpu().tolist()
+            # get_batch를 사용하여 여러 프레임을 한 번에 GPU 텐서에 로드
+            # 결과: (B, H, W, C) 형태의 GPU 텐서
+            batch_tensor = video.get_batch(batch_indices).to(device)
 
-                    # Handle case where batch_size is 1 (tolist() returns a float instead of list)
-                    if isinstance(batch_similarities, float):
-                        batch_similarities = [batch_similarities]
-                    
-                    similarities.extend(batch_similarities)
+            # 데이터 전처리 (GPU 상에서 수행)
+            # HWC -> CHW 순서 변경 및 Float 변환 (0~1 범위)
+            # CLIP 모델의 입력 규격에 맞게 조정이 필요할 수 있습니다.
+            batch_tensor = batch_tensor.permute(0, 3, 1, 2).float() / 255.0
+
+            # 모델 전처리 및 추론
+            # processor가 GPU 텐서를 직접 지원하지 않는 경우,
+            # torchvision.transforms.Resize 등을 사용하여 GPU에서 수동으로 크기를 조절하면 더욱 빠릅니다.
+            # 여기서는 편의를 위해 processor의 이미지 처리 로직을 텐서에 적용한다고 가정합니다.
+
+            with torch.no_grad():
+                # 이미지 특성 추출
+                # (현실적으로는 processor가 PIL을 요구하는 경우가 많으나,
+                # 텐서를 집접 넣어줄 수 있는 최신 버전이나 커스텀 전처리를 사용하면 복사 오버헤드가 0이 됩니다.)
+                inputs = processor(images=None, text=None, return_tensors="pt")
+                inputs['pixel_values'] = torch.nn.functional.interpolate(
+                    batch_tensor, size=(224, 224), mode='bicubic', align_corners=False
+                )
+                # 정규화 (CLIP 표준 값)
+                mean = torch.tensor([0.48145466, 0.4578275, 0.40821073]).to(device).view(1, 3, 1, 1)
+                std = torch.tensor([0.26862954, 0.26130258, 0.27577711]).to(device).view(1, 3, 1, 1)
+                inputs['pixel_values'] = (inputs['pixel_values'] - mean) / std
+                
+                image_features = model.get_image_features(pixel_values=inputs['pixel_values'])
+                image_features /= image_features.norm(dim=-1, keepdim=True)
+
+                # 코사인 유사도 계산
+                batch_similarities = (image_features @ text_features.T).squeeze(1).cpu().tolist()
+                
+                if isinstance(batch_similarities, float):
+                    batch_similarities = [batch_similarities]
+                
+                similarities.extend(batch_similarities)
+        
         return similarities
     
     return similarity_fn
