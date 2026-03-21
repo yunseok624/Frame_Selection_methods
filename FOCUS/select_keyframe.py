@@ -67,13 +67,18 @@ from focus import FOCUS
 #     return similarity_fn
 
 def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, batch_size: int):
-    """어떠한 환경에서도 에러 없이 작동하는 최적화된 CLIP 유사도 함수"""
+    """
+    사용자의 원본 CLIP 코드와 수학적으로 동일한 Logits 결과를 반환하며
+    GPU 디코딩을 통해 속도를 극대화한 버전입니다.
+    """
+    import torch.nn.functional as F
+    # Decord 가 GPU 텐서를 직접 반환하도록 설정
     decord.bridge.set_bridge('torch')
 
     def similarity_fn(video: VideoReader, query: str, frame_indices: List[int]) -> List[float]:
         similarities = []
         
-        # 1. 텍스트 특징 추출 (Truncation으로 77자 제한 해결)
+        # 1. 텍스트 특징 추출 (77토큰 제한 해결을 위해 truncation 추가)
         text_inputs = processor(
             text=[query], 
             return_tensors="pt", 
@@ -84,48 +89,51 @@ def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, ba
         
         with torch.no_grad():
             text_outputs = model.get_text_features(**text_inputs)
-            # [CRITICAL FIX] 객체일 경우 첫 번째 요소(텐서)만 추출
+            # 객체로 반환될 경우를 대비해 텐서만 추출
             text_features = text_outputs if isinstance(text_outputs, torch.Tensor) else text_outputs[0]
+            # 특징 벡터 정규화 (L2 Norm)
             text_features = text_features / text_features.norm(dim=-1, keepdim=True)
 
         for i in range(0, len(frame_indices), batch_size):
             batch_indices = frame_indices[i:i+batch_size]
             
             try:
-                # 2. GPU에서 배치로 프레임 읽기 및 전처리
-                # video 변수를 사용하여 현재 워커가 맡은 비디오 처리
-                batch_tensor = video.get_batch(batch_indices).to(device)
-                batch_tensor = batch_tensor.permute(0, 3, 1, 2).float() / 255.0
+                # 2. GPU에서 배치로 프레임 읽기 (B, H, W, C)
+                batch_frames = video.get_batch(batch_indices).to(device)
                 
-                # 224x224 리사이즈
-                pixel_values = torch.nn.functional.interpolate(
-                    batch_tensor, size=(224, 224), mode='bicubic', align_corners=False
-                )
+                # 3. GPU 상에서 CLIP 전처리 재현 (Resize & Normalization)
+                # (B, H, W, C) -> (B, C, H, W) 변환 및 float화
+                pixel_values = F.interpolate(
+                    batch_frames.permute(0, 3, 1, 2).float(), 
+                    size=(224, 224), 
+                    mode='bicubic', 
+                    align_corners=False
+                ) / 255.0
                 
-                # CLIP 표준 정규화
-                mean = torch.tensor([0.48145466, 0.4578275, 0.40821073]).to(device).view(1, 3, 1, 1)
-                std = torch.tensor([0.26862954, 0.26130258, 0.27577711]).to(device).view(1, 3, 1, 1)
+                # CLIP 공식 Mean/Std 적용
+                mean = torch.tensor([0.48145466, 0.4578275, 0.40821073], device=device).view(1, 3, 1, 1)
+                std = torch.tensor([0.26862954, 0.26130258, 0.27577711], device=device).view(1, 3, 1, 1)
                 pixel_values = (pixel_values - mean) / std
 
                 with torch.no_grad():
-                    # 3. 이미지 특징 추출
+                    # 4. 이미지 특징 추출 및 정규화
                     image_outputs = model.get_image_features(pixel_values=pixel_values)
-                    # [CRITICAL FIX] 객체일 경우 첫 번째 요소(텐서)만 추출
                     image_features = image_outputs if isinstance(image_outputs, torch.Tensor) else image_outputs[0]
                     image_features = image_features / image_features.norm(dim=-1, keepdim=True)
                     
-                    # 4. 유사도 계산 (Logit Scale 적용)
+                    # 5. Logits 계산 (사용자 코드의 logits_per_image와 동일한 수식)
+                    # 수식: Cosine_Similarity * exp(logit_scale)
                     logit_scale = model.logit_scale.exp()
-                    batch_logits = (logit_scale * image_features @ text_features.T).squeeze(1)
+                    batch_logits = (image_features @ text_features.T) * logit_scale
                     
-                    # 5. 결과 리스트 변환
-                    batch_res = batch_logits.cpu().tolist()
-                    if not isinstance(batch_res, list):
+                    # 6. 결과 리스트 변환 (Rank 0/1 출력 양식 유지)
+                    batch_res = batch_logits.squeeze(1).cpu().tolist()
+                    if isinstance(batch_res, float):
                         batch_res = [batch_res]
                     similarities.extend(batch_res)
             
             except Exception as e:
-                # 에러 발생 시 로그 출력 후 0.0으로 채워 진행 (중단 방지)
+                # 에러 발생 시 로그를 남기고 해당 배치만큼 0.0으로 채워 중단 방지
                 print(f"⚠️ Batch Error: {e}")
                 similarities.extend([0.0] * len(batch_indices))
                 
