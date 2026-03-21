@@ -67,8 +67,6 @@ from focus import FOCUS
 #     return similarity_fn
 
 def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, batch_size: int):
-    """최적화 및 에러 방지가 완벽히 적용된 CLIP 유사도 함수"""
-    
     # 1. Decord 브릿지 설정 (GPU 텐서 직접 사용)
     decord.bridge.set_bridge('torch')
 
@@ -87,6 +85,9 @@ def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, ba
         with torch.no_grad():
             text_features = model.get_text_features(**text_inputs)
             # 텍스트 특징 정규화
+            # 만약 결과가 객체라면 텐서만 추출
+            if hasattr(text_features, "pooler_output"):
+                text_features = text_features.pooler_output
             text_features = text_features / text_features.norm(dim=-1, keepdim=True)
 
         for i in range(0, len(frame_indices), batch_size):
@@ -185,7 +186,7 @@ def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict
                     "video_metadata": {"total_frames": 0, "fps": 0.0, "duration_seconds": 0.0, "budget_used": 0}
                 }
             else:
-                vr = VideoReader(video_file, ctx=gpu(0))
+                vr = VideoReader(video_file, ctx=gpu(0). num_threads=1)
                 fps = float(vr.get_avg_fps())
                 total_frames = len(vr)
                 video_duration = float(total_frames) / max(1.0, fps)
