@@ -9,7 +9,7 @@ python ./evaluation/insert_frame_num.py \
 
 CUDA_VISIBLE_DEVICES=0,1 accelerate launch --num_processes 2 --mixed_precision fp16 --main_process_port 12345 -m lmms_eval \
     --model llava_onevision \
-    --model_args pretrained=/kaggle/temp/llava-onevision-qwen2-7b-ov,conv_template=chatml_direct,video_decode_backend=decord,max_frames_num=32,overwrite=False,use_topk=False,attn_implementation=sdpa \
+    --model_args pretrained=/kaggle/temp/llava-onevision-qwen2-7b-ov,conv_template=chatml_direct,video_decode_backend=decord,max_frames_num=32,use_topk=False,attn_implementation=sdpa \
     --tasks videomme \
     --batch_size 1 \
     --log_samples \
