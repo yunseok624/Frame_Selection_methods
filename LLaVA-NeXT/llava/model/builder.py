@@ -204,6 +204,12 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
 
             elif "qwen" in model_name.lower() or "quyen" in model_name.lower():
                 tokenizer = AutoTokenizer.from_pretrained(model_path)
+
+                if load_8bit or load_4bit:
+                    import transformers
+                    _orig_to = transformers.modeling_utils.PreTrainedModel.to
+                    transformers.modeling_utils.PreTrainedModel.to = lambda self, *args, **kw: self
+
                 if "moe" in model_name.lower() or "A14B" in model_name.lower():
                     from llava.model.language_model.llava_qwen_moe import LlavaQwenMoeConfig
                     if overwrite_config is not None:
@@ -224,15 +230,10 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
                             setattr(llava_cfg, k, v)
                         model = LlavaQwenForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, attn_implementation=attn_implementation, config=llava_cfg, **kwargs)
                     else:
-                        if load_8bit or load_4bit:
-                            import transformers
-                            _orig_to = transformers.modeling_utils.PreTrainedModel.to
-                            transformers.modeling_utils.PreTrainedModel.to = lambda self, *args, **kw: self
-                        
                         model = LlavaQwenForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, attn_implementation=attn_implementation, **kwargs)
 
-                        if load_8bit or load_4bit:
-                            transformers.modeling_utils.PreTrainedModel.to = _orig_to
+                if load_8bit or load_4bit:
+                    transformers.modeling_utils.PreTrainedModel.to = _orig_to
 
             elif "gemma" in model_name.lower():
                 tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
