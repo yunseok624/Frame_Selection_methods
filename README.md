@@ -121,7 +121,7 @@ Welcome! This repository is dedicated to exploring and benchmarking various fram
       <td align="center">Uniform</td>
       <td align="center">32</td>
       <td align="center">7B</td>
-      <td align="center">TBD</td>
+      <td align="center">55.50</td>
       <td align="center">TBD</td>
       <td align="center">TBD</td>
     </tr>
