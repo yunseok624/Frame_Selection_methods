@@ -11,6 +11,7 @@ import argparse
 import datetime
 import random
 import time
+from types import SimpleNamespace
 from typing import Optional, List, Tuple, Dict
 
 import numpy as np
@@ -20,8 +21,6 @@ import decord
 from decord import VideoReader, cpu, gpu
 from PIL import Image
 from tqdm import tqdm
-import torchvision.transforms as T
-from torchvision.transforms import InterpolationMode
 
 # from lavis.models import load_model_and_preprocess
 from transformers import CLIPProcessor, CLIPModel
@@ -32,90 +31,43 @@ from focus import FOCUS
 # Video Processing Functions
 # ============================================================================
 
-# def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, batch_size: int):
-#     """Create a CLIP-based similarity function for FOCUS algorithm."""
-#     def similarity_fn(video: VideoReader, query: str, fram_indices: List[int]) -> List[float]:
-#         similarities = []
-
-#         for i in range(0, len(fram_indices), batch_size):
-#             batch_indices = fram_indices[i:i+batch_size]
-#             batch_images = []
-#             for idx in batch_indices:
-#                 raw_image = vr[idx].asnumpy()
-#                 raw_image = Image.fromarray(raw_image)
-#                 batch_images.append(raw_image)
-            
-#             if batch_images:
-#                 # Process text and images using CLIP Processor
-#                 inputs = processor(
-#                     text=[query],
-#                     images=batch_images,
-#                     return_tensors="pt",
-#                     padding=True
-#                 ).to(device)
-
-#                 with torch.no_grad():
-#                     outputs = model(**inputs)
-#                     # CLIP outputs logits_per_image representing cosine similarity * logit_scale
-#                     batch_similarities = outputs.logits_per_image[:, 0].cpu().tolist()
-
-#                     # Handle case where batch_size is 1 (tolist() returns a float instead of list)
-#                     if isinstance(batch_similarities, float):
-#                         batch_similarities = [batch_similarities]
-                    
-#                     similarities.extend(batch_similarities)
-#         return similarities
-    
-#     return similarity_fn
-
 def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, batch_size: int):
     """Create a CLIP-based similarity function for FOCUS algorithm."""
-    # GPU에서 직접 이미지를 전처리(Resize, Crop, Normalize)하기 위한 torchvision Transform
-    # CLIP 모델이 요구하는 표준 설정값입니다.
-    gpu_transform = T.Compose([
-        T.Resize(224, interpolation=InterpolationMode.BICUBIC, antialias=True),
-        T.CenterCrop(224),
-        T.Normalize(
-            mean=(0.48145466, 0.4578275, 0.40821073),
-            std=(0.26862954, 0.26130258, 0.27577711)
-        )
-    ])
-
     def similarity_fn(video: VideoReader, query: str, fram_indices: List[int]) -> List[float]:
         similarities = []
-        
-        # 텍스트 전처리는 매우 가벼우므로 한 번만 수행하여 device(GPU)로 올립니다.
-        text_inputs = processor(text=[query], return_tensors="pt", padding=True).to(device)
 
         for i in range(0, len(fram_indices), batch_size):
             batch_indices = fram_indices[i:i+batch_size]
-            
-            # 1. GPU에 있는 프레임을 PyTorch Tensor로 바로 가져옵니다. (B, H, W, C)
-            frames = vr.get_batch(batch_indices)
-            
-            # 2. Tensor 형태 및 타입 변환: (B, H, W, C) -> (B, C, H, W), float32, [0, 1] 범위
-            if not isinstance(frames, torch.Tensor): # decord bridge 실패 대비 fallback
-                frames = torch.from_numpy(frames.asnumpy())
-            frames = frames.to(device).permute(0, 3, 1, 2).float() / 255.0
-            
-            # 3. GPU 가속 Transform 적용 (CPU를 거치지 않습니다!)
-            pixel_values = gpu_transform(frames)
+            # batch_images = []
+            # for idx in batch_indices:
+            #     raw_image = vr[idx].asnumpy()
+            #     raw_image = Image.fromarray(raw_image)
+            #     batch_images.append(raw_image)
 
-            with torch.no_grad():
-                # 전처리된 pixel_values를 모델에 직접 전달합니다.
-                outputs = model(
-                    input_ids=text_inputs.input_ids,
-                    attention_mask=text_inputs.attention_mask,
-                    pixel_values=pixel_values
-                )
-                
-                # CLIP outputs logits_per_image representing cosine similarity * logit_scale
-                batch_similarities = outputs.logits_per_image[:, 0].cpu().tolist()
+            # Use get_batch() for vectorized frame decode instead of
+            # one-by-one vr[idx].asnnumpy - avoids a Python loop per frame
+            raw_frames = vr.get_batch(batch_indices).numpy() # (N, H, W, C)
+            batch_images = [Image.fromarray(raw_frames[j]) for j in range(len(batch_indices))]
+            
+            if batch_images:
+                # Process text and images using CLIP Processor
+                inputs = processor(
+                    text=[query],
+                    images=batch_images,
+                    return_tensors="pt",
+                    padding=True
+                ).to(device)
 
-                if isinstance(batch_similarities, float):
-                    batch_similarities = [batch_similarities]
-                
-                similarities.extend(batch_similarities)
+                with torch.no_grad():
+                    outputs = model(**inputs)
+                    # CLIP outputs logits_per_image representing cosine similarity * logit_scale
+                    batch_similarities = outputs.logits_per_image[:, 0].cpu().tolist()
+
+                    # Handle case where batch_size is 1 (tolist() returns a float instead of list)
+                    if isinstance(batch_similarities, float):
+                        batch_similarities = [batch_similarities]
+                    
+                    similarities.extend(batch_similarities)
         return similarities
     
     return similarity_fn
@@ -127,23 +79,22 @@ def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, ba
 @ray.remote(num_gpus=1)
 def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict):
     """Ray worker for distributed processing."""
-    # Decord가 Numpy Array가 아닌 PyTorch Tensor를 반환하도록 Bridge를 설정합니다.
-    decord.bridge.set_bridge('torch')
     
     worker_start_time = time.time()
 
-    class Args: pass
-    args = Args()
-    for k, v in args_dict.items():
-        setattr(args, k, v)
+    # Use SimpleNamespace instead of a dynamic class built with setattr
+    args = SimpleNamespace(**args_dict)
 
-    device = 'cuda:0'
+    # Derive the GPU index from dp_rank so each worker targets its
+    # own device rather than hard-coding cuda:0 for every worker
+    device = f'cuda:{dp_rank % torch.cuda.device_count()}'
+
     full_output_dir = os.path.join('./selected_frames', args.dataset_name, args.output_dir)
     os.makedirs(full_output_dir, exist_ok=True)
     output_json = os.path.join(full_output_dir, f"{output_json_base_prefix}_rank{dp_rank}.json")
 
     model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
-    processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32", use_fast=False)
+    processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
     video_root = (args.dataset_path + '/videos' if args.dataset_name == 'longvideobench' else args.dataset_path + '/data')
     rng = np.random.default_rng(args.seed + dp_rank)
@@ -154,117 +105,117 @@ def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict
     
     pbar = tqdm(data_slice, desc=f"Rank {dp_rank}", ncols=100)
     for original_idx, data in pbar:
+        selected = []
+        budget_used = 0
+        total_frames = 0
+        video_duration = 0.0
+        sampling_details = _empty_sampling_details()
         try:
             text = data['question']
             video_file = (os.path.join(video_root, data['video_path'])
                           if args.dataset_name == 'longvideobench'
                           else os.path.join(video_root, data['videoID'] + '.mp4'))
-
+            
+            # Separate FileNotFoundError from unexpected failures so
+            # missing videos are handled silently while real erros are still
+            # surfaced with heir full traceback context
             if not os.path.exists(video_file):
-                selected = []
-                budget_used = 0
-                total_frames = 0
-                video_duration = 0.0
-                sampling_details = {
-                    "coarse_sampling": {"frame_indices": [], "relevance_scores": [], "temporal_order": [], "budget_used": 0},
-                    "fine_sampling": {"frame_indices": [], "relevance_scores": [], "temporal_order": [], "budget_used": 0},
-                    "arms_info": {"total_arms": 0, "frames_per_arm": 0, "arms": []},
-                    "arm_selection_probabilities": [],
-                    "final_selected_frames": [],
-                    "video_metadata": {"total_frames": 0, "fps": 0.0, "duration_seconds": 0.0, "budget_used": 0}
-                }
+                raise FileNotFoundError(f"Video file not found: {video_file}")
+            
+            # Use the worker-specific device index for GPU-side
+            # video decoding instead of hard-coding gpu(0)
+            gpu_id = dp_rank % torch.cuda.device_count()
+            vr = VideoReader(video_file, ctx=gpu(gpu_id))
+            fps = float(vr.get_avg_fps())
+            total_frames = len(vr)
+            video_duration = float(total_frames) / max(1.0, fps)
+
+            # Adaptive min-gap calculation
+            avg_spacing_sec = video_duration / max(1, args.num_keyframes)
+            if avg_spacing_sec <= float(args.disable_gap_below_sec):
+                auto_min_gap_sec = 0.0
             else:
-                # VideoReader를 다시 GPU로 설정하여 메모리 이동을 완전히 차단합니다.
-                vr = VideoReader(video_file, ctx=gpu(0), num_threads=1)
-                fps = float(vr.get_avg_fps())
-                total_frames = len(vr)
-                video_duration = float(total_frames) / max(1.0, fps)
+                gap_from_ratio = float(args.gap_ratio_of_avg) * avg_spacing_sec
+                auto_min_gap_sec = min(gap_from_ratio, float(args.min_gap_sec))
 
-                # Adaptive min-gap calculation
-                avg_spacing_sec = video_duration / max(1, args.num_keyframes)
-                if avg_spacing_sec <= float(args.disable_gap_below_sec):
-                    auto_min_gap_sec = 0.0
-                else:
-                    gap_from_ratio = float(args.gap_ratio_of_avg) * avg_spacing_sec
-                    auto_min_gap_sec = min(gap_from_ratio, float(args.min_gap_sec))
+            # Create CLIP similarity function
+            similarity_fn = create_clip_similarity_fn(
+                vr, processor, model, device, args.batch_size
+            )
 
-                # Create CLIP similarity function
-                similarity_fn = create_clip_similarity_fn(
-                    vr, processor, model, device, args.batch_size
-                )
+            # Create FOCUS instance
+            focus = FOCUS(
+                similarity_fn=similarity_fn,
+                coarse_every_sec=args.coarse_every_sec,
+                fine_every_sec=args.fine_every_sec,
+                zoom_ratio=args.zoom_ratio,
+                final_min_arms=args.final_min_arms,
+                final_max_arms=args.final_max_arms,
+                min_coarse_segments=args.min_coarse_segments,
+                min_zoom_segments=args.min_zoom_segments,
+                extra_samples_per_region=args.extra_samples_per_region,
+                min_variance_threshold=args.min_variance_threshold,
+                fine_uniform_ratio=args.fine_uniform_ratio,
+                interpolation_method=args.interpolation_method,
+                top_ratio=args.top_ratio,
+                temperature=args.temperature,
+                region_half_window_sec=args.region_half_window_sec
+            )
 
-                # Create FOCUS instance
-                focus = FOCUS(
-                    similarity_fn=similarity_fn,
-                    coarse_every_sec=args.coarse_every_sec,
-                    fine_every_sec=args.fine_every_sec,
-                    zoom_ratio=args.zoom_ratio,
-                    final_min_arms=args.final_min_arms,
-                    final_max_arms=args.final_max_arms,
-                    min_coarse_segments=args.min_coarse_segments,
-                    min_zoom_segments=args.min_zoom_segments,
-                    extra_samples_per_region=args.extra_samples_per_region,
-                    min_variance_threshold=args.min_variance_threshold,
-                    fine_uniform_ratio=args.fine_uniform_ratio,
-                    interpolation_method=args.interpolation_method,
-                    top_ratio=args.top_ratio,
-                    temperature=args.temperature,
-                    region_half_window_sec=args.region_half_window_sec
-                )
+            # Select keyframes using FOCUS algorithm
+            selected, sampling_details = focus.select_keyframes(
+                video=vr,
+                query=text,
+                k=args.num_keyframes,
+                min_gap_sec=auto_min_gap_sec,
+                rng=rng
+            )
 
-                # Select keyframes using FOCUS algorithm
-                selected, sampling_details = focus.select_keyframes(
-                    video=vr,
-                    query=text,
-                    k=args.num_keyframes,
-                    min_gap_sec=auto_min_gap_sec,
-                    rng=rng
-                )
-
-                budget_used = sampling_details["video_metadata"]["budget_used"]
-
-            results.append({"original_idx": original_idx, "selected_frames": [int(x) for x in selected]})
-            budget_stats.append({
-                "original_idx": original_idx,
-                "budget_used": int(budget_used),
-                "total_frames": int(total_frames),
-                "video_duration": float(video_duration)
-            })
-            sampling_details_results.append({
-                "original_idx": original_idx,
-                **sampling_details
-            })
-
-            with open(output_json, 'w') as f:
-                json.dump(results, f)
-            pbar.set_postfix({"processed": len(results), "last_selected": len(selected)})
-
+            budget_used = sampling_details["video_metadata"]["budget_used"]
+        
+        except FileNotFoundError as e:
+            print(f"Missing video for index {original_idx}: {e}")
         except Exception as e:
             print(f"Error on video {original_idx}: {e}")
-            results.append({"original_idx": original_idx, "selected_frames": []})
-            budget_stats.append({
-                "original_idx": original_idx,
-                "budget_used": 0,
-                "total_frames": 0,
-                "video_duration": 0.0
-            })
-            sampling_details_results.append({
-                "original_idx": original_idx,
-                "coarse_sampling": {"frame_indices": [], "relevance_scores": [], "temporal_order": [], "budget_used": 0},
-                "fine_sampling": {"frame_indices": [], "relevance_scores": [], "temporal_order": [], "budget_used": 0},
-                "arms_info": {"total_arms": 0, "frames_per_arm": 0, "arms": []},
-                "arm_selection_probabilities": [],
-                "final_selected_frames": [],
-                "video_metadata": {"total_frames": 0, "fps": 0.0, "duration_seconds": 0.0, "budget_used": 0}
-            })
-            with open(output_json, 'w') as f:
-                json.dump(results, f)
+        
+        results.append({"original_idx": original_idx, "selected_frames": [int(x) for x in selected]})
+        budget_stats.append({
+            "original_idx": original_idx,
+            "budget_used": int(budget_used),
+            "total_frames": int(total_frames),
+            "video_duration": video_duration
+        })
+        sampling_details_results.append({
+            "original_idx": original_idx,
+            **sampling_details
+        })
 
+        pbar.set_postfix({"processed": len(results), "last_selected": len(selected)})
+    
+    # Write the JSON output once after all videos are processed
+    # instead of rewriting the entire list on every iteration
+    with open(output_json, "w") as f:
+        json.dump(results, f)
+    
     worker_end_time = time.time()
     worker_runtime_hours = (worker_end_time - worker_start_time) / 3600
 
     return output_json, budget_stats, worker_runtime_hours, sampling_details_results
 
+# ============================================================================
+# Helper Functions
+# ============================================================================
+ 
+def _empty_sampling_details() -> dict:
+    """Return a zeroed-out sampling details dict for missing/failed videos."""
+    return {
+        "coarse_sampling": {"frame_indices": [], "relevance_scores": [], "temporal_order": [], "budget_used": 0},
+        "fine_sampling": {"frame_indices": [], "relevance_scores": [], "temporal_order": [], "budget_used": 0},
+        "arms_info": {"total_arms": 0, "frames_per_arm": 0, "arms": []},
+        "arm_selection_probabilities": [],
+        "final_selected_frames": [],
+        "video_metadata": {"total_frames": 0, "fps": 0.0, "duration_seconds": 0.0, "budget_used": 0}
+    }
 
 # ============================================================================
 # File I/O Functions
@@ -509,7 +460,6 @@ def main():
             "time_speedup": time_speedup
         },
         "algorithm_params": {
-            # "blip_model": args.blip_model,
             "top_ratio": args.top_ratio,
             "extra_samples_per_region": args.extra_samples_per_region,
             "min_variance_threshold": args.min_variance_threshold,
