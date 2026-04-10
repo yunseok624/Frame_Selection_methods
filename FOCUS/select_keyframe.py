@@ -12,7 +12,7 @@ import datetime
 import random
 import time
 from types import SimpleNamespace
-from typing import Optional, List, Tuple, Dict
+from typing import List, Dict
 
 import numpy as np
 import torch
@@ -21,7 +21,6 @@ from decord import VideoReader, gpu
 from PIL import Image
 from tqdm import tqdm
 
-# from lavis.models import load_model_and_preprocess
 from transformers import CLIPProcessor, CLIPModel
 from focus import FOCUS
 
@@ -37,15 +36,10 @@ def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, ba
 
         for i in range(0, len(fram_indices), batch_size):
             batch_indices = fram_indices[i:i+batch_size]
-            # batch_images = []
-            # for idx in batch_indices:
-            #     raw_image = vr[idx].asnumpy()
-            #     raw_image = Image.fromarray(raw_image)
-            #     batch_images.append(raw_image)
 
             # Use get_batch() for vectorized frame decode instead of
             # one-by-one vr[idx].asnnumpy - avoids a Python loop per frame
-            raw_frames = vr.get_batch(batch_indices).numpy() # (N, H, W, C)
+            raw_frames = vr.get_batch(batch_indices).asnumpy() # (N, H, W, C)
             batch_images = [Image.fromarray(raw_frames[j]) for j in range(len(batch_indices))]
             
             if batch_images:
@@ -93,7 +87,7 @@ def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict
     output_json = os.path.join(full_output_dir, f"{output_json_base_prefix}_rank{dp_rank}.json")
 
     model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
-    processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+    processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32", use_fast=False)
 
     video_root = (args.dataset_path + '/videos' if args.dataset_name == 'longvideobench' else args.dataset_path + '/data')
     rng = np.random.default_rng(args.seed + dp_rank)
