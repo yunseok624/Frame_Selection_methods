@@ -17,8 +17,7 @@ from typing import Optional, List, Tuple, Dict
 import numpy as np
 import torch
 import ray
-import decord
-from decord import VideoReader, cpu, gpu
+from decord import VideoReader, gpu
 from PIL import Image
 from tqdm import tqdm
 
