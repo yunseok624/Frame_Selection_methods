@@ -35,11 +35,11 @@ def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, ba
 
         for i in range(0, len(fram_indices), batch_size):
             batch_indices = fram_indices[i:i+batch_size]
-
-            # Use get_batch() for vectorized frame decode instead of
-            # one-by-one vr[idx].asnnumpy - avoids a Python loop per frame
-            raw_frames = vr.get_batch(batch_indices).asnumpy() # (N, H, W, C)
-            batch_images = [Image.fromarray(raw_frames[j]) for j in range(len(batch_indices))]
+            batch_images = []
+            for idx in batch_indices:
+                raw_image = vr[idx].asnumpy()
+                raw_image = Image.fromarray(raw_image)
+                batch_images.append(raw_image)
             
             if batch_images:
                 # Process text and images using CLIP Processor
