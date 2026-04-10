@@ -6,6 +6,8 @@ for the FOCUS keyframe extraction algorithm.
 """
 
 import os
+os.environ["RAY_DEDUP_LOGS"] = "0"
+
 import json
 import argparse
 import datetime
@@ -16,7 +18,7 @@ from typing import List, Dict
 import numpy as np
 import torch
 import ray
-from decord import VideoReader, cpu
+from decord import VideoReader, cpu, gpu
 from PIL import Image
 from tqdm import tqdm
 
@@ -35,11 +37,13 @@ def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, ba
 
         for i in range(0, len(fram_indices), batch_size):
             batch_indices = fram_indices[i:i+batch_size]
-            batch_images = []
-            for idx in batch_indices:
-                raw_image = vr[idx].asnumpy()
-                raw_image = Image.fromarray(raw_image)
-                batch_images.append(raw_image)
+            # batch_images = []
+            # for idx in batch_indices:
+            #     raw_image = vr[idx].asnumpy()
+            #     raw_image = Image.fromarray(raw_image)
+            #     batch_images.append(raw_image)
+            frames = vr.get_batch(batch_indices).asnumpy()
+            batch_images = [Image.fromarray(f) for f in frames]
             
             if batch_images:
                 # Process text and images using CLIP Processor
@@ -47,7 +51,9 @@ def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, ba
                     text=[query],
                     images=batch_images,
                     return_tensors="pt",
-                    padding=True
+                    padding=True,
+                    truncation=True,
+                    max_length=77
                 ).to(device)
 
                 with torch.no_grad():
@@ -78,7 +84,7 @@ def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict
     for k, v in args_dict.items():
         setattr(args, k, v)
 
-    device = 'cuda:0'
+    device = 'cuda'
     full_output_dir = os.path.join('./selected_frames', args.dataset_name, args.output_dir)
     os.makedirs(full_output_dir, exist_ok=True)
     output_json = os.path.join(full_output_dir, f"{output_json_base_prefix}_rank{dp_rank}.json")
