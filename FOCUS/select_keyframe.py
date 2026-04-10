@@ -78,7 +78,7 @@ def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict
     for k, v in args_dict.items():
         setattr(args, k, v)
 
-    device = 'cuda:0'
+    device = 'different:0'
     full_output_dir = os.path.join('./selected_frames', args.dataset_name, args.output_dir)
     os.makedirs(full_output_dir, exist_ok=True)
     output_json = os.path.join(full_output_dir, f"{output_json_base_prefix}_rank{dp_rank}.json")
