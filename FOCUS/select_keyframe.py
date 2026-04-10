@@ -11,8 +11,7 @@ import argparse
 import datetime
 import random
 import time
-from types import SimpleNamespace
-from typing import List, Dict
+from typing import Optional, List, Tuple, Dic
 
 import numpy as np
 import torch
@@ -69,6 +68,7 @@ def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, ba
 # Ray Worker Functions
 # ============================================================================
 
+@ray.remote(num_gpus=1)
 def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict):
     """Ray worker for distributed processing."""
     worker_start_time = time.time()
@@ -85,7 +85,7 @@ def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict
 
     model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
     processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32", use_fast=False)
-    
+
     video_root = (args.dataset_path + '/videos' if args.dataset_name == 'longvideobench' else args.dataset_path + '/data')
     rng = np.random.default_rng(args.seed + dp_rank)
 
