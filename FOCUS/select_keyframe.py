@@ -17,7 +17,7 @@ from typing import List, Dict
 import numpy as np
 import torch
 import ray
-from decord import VideoReader, gpu
+from decord import VideoReader, cpu, gpu
 from PIL import Image
 from tqdm import tqdm
 
@@ -78,9 +78,7 @@ def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict
     # Use SimpleNamespace instead of a dynamic class built with setattr
     args = SimpleNamespace(**args_dict)
 
-    # Derive the GPU index from dp_rank so each worker targets its
-    # own device rather than hard-coding cuda:0 for every worker
-    device = f'cuda:{dp_rank % torch.cuda.device_count()}'
+    device = 'different:0'
 
     full_output_dir = os.path.join('./selected_frames', args.dataset_name, args.output_dir)
     os.makedirs(full_output_dir, exist_ok=True)
@@ -115,10 +113,7 @@ def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict
             if not os.path.exists(video_file):
                 raise FileNotFoundError(f"Video file not found: {video_file}")
             
-            # Use the worker-specific device index for GPU-side
-            # video decoding instead of hard-coding gpu(0)
-            gpu_id = dp_rank % torch.cuda.device_count()
-            vr = VideoReader(video_file, ctx=gpu(gpu_id))
+            vr = VideoReader(video_file, ctx=cpu(0))
             fps = float(vr.get_avg_fps())
             total_frames = len(vr)
             video_duration = float(total_frames) / max(1.0, fps)
