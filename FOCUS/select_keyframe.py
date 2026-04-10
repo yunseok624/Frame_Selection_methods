@@ -11,7 +11,7 @@ import argparse
 import datetime
 import random
 import time
-from typing import Optional, List, Tuple, Dic
+from typing import Optional, List, Tuple, Dict
 
 import numpy as np
 import torch
