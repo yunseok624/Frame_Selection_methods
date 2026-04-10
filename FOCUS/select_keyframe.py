@@ -69,24 +69,23 @@ def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, ba
 # Ray Worker Functions
 # ============================================================================
 
-@ray.remote(num_gpus=1)
 def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict):
     """Ray worker for distributed processing."""
-    
     worker_start_time = time.time()
 
-    # Use SimpleNamespace instead of a dynamic class built with setattr
-    args = SimpleNamespace(**args_dict)
+    class Args: pass
+    args = Args()
+    for k, v in args_dict.items():
+        setattr(args, k, v)
 
-    device = 'different:0'
-
+    device = 'cuda:0'
     full_output_dir = os.path.join('./selected_frames', args.dataset_name, args.output_dir)
     os.makedirs(full_output_dir, exist_ok=True)
     output_json = os.path.join(full_output_dir, f"{output_json_base_prefix}_rank{dp_rank}.json")
 
     model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
     processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32", use_fast=False)
-
+    
     video_root = (args.dataset_path + '/videos' if args.dataset_name == 'longvideobench' else args.dataset_path + '/data')
     rng = np.random.default_rng(args.seed + dp_rank)
 
@@ -96,114 +95,115 @@ def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict
     
     pbar = tqdm(data_slice, desc=f"Rank {dp_rank}", ncols=100)
     for original_idx, data in pbar:
-        selected = []
-        budget_used = 0
-        total_frames = 0
-        video_duration = 0.0
-        sampling_details = _empty_sampling_details()
         try:
             text = data['question']
             video_file = (os.path.join(video_root, data['video_path'])
                           if args.dataset_name == 'longvideobench'
                           else os.path.join(video_root, data['videoID'] + '.mp4'))
-            
-            # Separate FileNotFoundError from unexpected failures so
-            # missing videos are handled silently while real erros are still
-            # surfaced with heir full traceback context
+
             if not os.path.exists(video_file):
-                raise FileNotFoundError(f"Video file not found: {video_file}")
-            
-            vr = VideoReader(video_file, ctx=cpu(0))
-            fps = float(vr.get_avg_fps())
-            total_frames = len(vr)
-            video_duration = float(total_frames) / max(1.0, fps)
-
-            # Adaptive min-gap calculation
-            avg_spacing_sec = video_duration / max(1, args.num_keyframes)
-            if avg_spacing_sec <= float(args.disable_gap_below_sec):
-                auto_min_gap_sec = 0.0
+                selected = []
+                budget_used = 0
+                total_frames = 0
+                video_duration = 0.0
+                sampling_details = {
+                    "coarse_sampling": {"frame_indices": [], "relevance_scores": [], "temporal_order": [], "budget_used": 0},
+                    "fine_sampling": {"frame_indices": [], "relevance_scores": [], "temporal_order": [], "budget_used": 0},
+                    "arms_info": {"total_arms": 0, "frames_per_arm": 0, "arms": []},
+                    "arm_selection_probabilities": [],
+                    "final_selected_frames": [],
+                    "video_metadata": {"total_frames": 0, "fps": 0.0, "duration_seconds": 0.0, "budget_used": 0}
+                }
             else:
-                gap_from_ratio = float(args.gap_ratio_of_avg) * avg_spacing_sec
-                auto_min_gap_sec = min(gap_from_ratio, float(args.min_gap_sec))
+                vr = VideoReader(video_file, ctx=cpu(0))
+                fps = float(vr.get_avg_fps())
+                total_frames = len(vr)
+                video_duration = float(total_frames) / max(1.0, fps)
 
-            # Create CLIP similarity function
-            similarity_fn = create_clip_similarity_fn(
-                vr, processor, model, device, args.batch_size
-            )
+                # Adaptive min-gap calculation
+                avg_spacing_sec = video_duration / max(1, args.num_keyframes)
+                if avg_spacing_sec <= float(args.disable_gap_below_sec):
+                    auto_min_gap_sec = 0.0
+                else:
+                    gap_from_ratio = float(args.gap_ratio_of_avg) * avg_spacing_sec
+                    auto_min_gap_sec = min(gap_from_ratio, float(args.min_gap_sec))
 
-            # Create FOCUS instance
-            focus = FOCUS(
-                similarity_fn=similarity_fn,
-                coarse_every_sec=args.coarse_every_sec,
-                fine_every_sec=args.fine_every_sec,
-                zoom_ratio=args.zoom_ratio,
-                final_min_arms=args.final_min_arms,
-                final_max_arms=args.final_max_arms,
-                min_coarse_segments=args.min_coarse_segments,
-                min_zoom_segments=args.min_zoom_segments,
-                extra_samples_per_region=args.extra_samples_per_region,
-                min_variance_threshold=args.min_variance_threshold,
-                fine_uniform_ratio=args.fine_uniform_ratio,
-                interpolation_method=args.interpolation_method,
-                top_ratio=args.top_ratio,
-                temperature=args.temperature,
-                region_half_window_sec=args.region_half_window_sec
-            )
+                # Create CLIP similarity function
+                similarity_fn = create_clip_similarity_fn(
+                    vr, processor, model, device, args.batch_size
+                    )
 
-            # Select keyframes using FOCUS algorithm
-            selected, sampling_details = focus.select_keyframes(
-                video=vr,
-                query=text,
-                k=args.num_keyframes,
-                min_gap_sec=auto_min_gap_sec,
-                rng=rng
-            )
+                # Create FOCUS instance
+                focus = FOCUS(
+                    similarity_fn=similarity_fn,
+                    coarse_every_sec=args.coarse_every_sec,
+                    fine_every_sec=args.fine_every_sec,
+                    zoom_ratio=args.zoom_ratio,
+                    final_min_arms=args.final_min_arms,
+                    final_max_arms=args.final_max_arms,
+                    min_coarse_segments=args.min_coarse_segments,
+                    min_zoom_segments=args.min_zoom_segments,
+                    extra_samples_per_region=args.extra_samples_per_region,
+                    min_variance_threshold=args.min_variance_threshold,
+                    fine_uniform_ratio=args.fine_uniform_ratio,
+                    interpolation_method=args.interpolation_method,
+                    top_ratio=args.top_ratio,
+                    temperature=args.temperature,
+                    region_half_window_sec=args.region_half_window_sec
+                )
 
-            budget_used = sampling_details["video_metadata"]["budget_used"]
-        
-        except FileNotFoundError as e:
-            print(f"Missing video for index {original_idx}: {e}")
+                # Select keyframes using FOCUS algorithm
+                selected, sampling_details = focus.select_keyframes(
+                    video=vr,
+                    query=text,
+                    k=args.num_keyframes,
+                    min_gap_sec=auto_min_gap_sec,
+                    rng=rng
+                )
+
+                budget_used = sampling_details["video_metadata"]["budget_used"]
+
+            results.append({"original_idx": original_idx, "selected_frames": [int(x) for x in selected]})
+            budget_stats.append({
+                "original_idx": original_idx,
+                "budget_used": int(budget_used),
+                "total_frames": int(total_frames),
+                "video_duration": float(video_duration)
+            })
+            sampling_details_results.append({
+                "original_idx": original_idx,
+                **sampling_details
+            })
+
+            with open(output_json, 'w') as f:
+                json.dump(results, f)
+            pbar.set_postfix({"processed": len(results), "last_selected": len(selected)})
+
         except Exception as e:
             print(f"Error on video {original_idx}: {e}")
-        
-        results.append({"original_idx": original_idx, "selected_frames": [int(x) for x in selected]})
-        budget_stats.append({
-            "original_idx": original_idx,
-            "budget_used": int(budget_used),
-            "total_frames": int(total_frames),
-            "video_duration": video_duration
-        })
-        sampling_details_results.append({
-            "original_idx": original_idx,
-            **sampling_details
-        })
+            results.append({"original_idx": original_idx, "selected_frames": []})
+            budget_stats.append({
+                "original_idx": original_idx,
+                "budget_used": 0,
+                "total_frames": 0,
+                "video_duration": 0.0
+            })
+            sampling_details_results.append({
+                "original_idx": original_idx,
+                "coarse_sampling": {"frame_indices": [], "relevance_scores": [], "temporal_order": [], "budget_used": 0},
+                "fine_sampling": {"frame_indices": [], "relevance_scores": [], "temporal_order": [], "budget_used": 0},
+                "arms_info": {"total_arms": 0, "frames_per_arm": 0, "arms": []},
+                "arm_selection_probabilities": [],
+                "final_selected_frames": [],
+                "video_metadata": {"total_frames": 0, "fps": 0.0, "duration_seconds": 0.0, "budget_used": 0}
+            })
+            with open(output_json, 'w') as f:
+                json.dump(results, f)
 
-        pbar.set_postfix({"processed": len(results), "last_selected": len(selected)})
-    
-    # Write the JSON output once after all videos are processed
-    # instead of rewriting the entire list on every iteration
-    with open(output_json, "w") as f:
-        json.dump(results, f)
-    
     worker_end_time = time.time()
     worker_runtime_hours = (worker_end_time - worker_start_time) / 3600
 
     return output_json, budget_stats, worker_runtime_hours, sampling_details_results
-
-# ============================================================================
-# Helper Functions
-# ============================================================================
- 
-def _empty_sampling_details() -> dict:
-    """Return a zeroed-out sampling details dict for missing/failed videos."""
-    return {
-        "coarse_sampling": {"frame_indices": [], "relevance_scores": [], "temporal_order": [], "budget_used": 0},
-        "fine_sampling": {"frame_indices": [], "relevance_scores": [], "temporal_order": [], "budget_used": 0},
-        "arms_info": {"total_arms": 0, "frames_per_arm": 0, "arms": []},
-        "arm_selection_probabilities": [],
-        "final_selected_frames": [],
-        "video_metadata": {"total_frames": 0, "fps": 0.0, "duration_seconds": 0.0, "budget_used": 0}
-    }
 
 # ============================================================================
 # File I/O Functions
