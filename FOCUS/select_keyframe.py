@@ -99,7 +99,8 @@ def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict
     budget_stats = []
     sampling_details_results = []
     
-    pbar = tqdm(data_slice, desc=f"Rank {dp_rank}", ncols=100)
+    # pbar = tqdm(data_slice, desc=f"Rank {dp_rank}", ncols=100)
+    pbar = tqdm(data_slice, desc=f"Rank {dp_rank}", ncols=100, position=dp_rank, leave=True)
     for original_idx, data in pbar:
         try:
             text = data['question']
