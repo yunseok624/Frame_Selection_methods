@@ -25,8 +25,6 @@ from tqdm import tqdm
 from transformers import CLIPProcessor, CLIPModel
 from focus import FOCUS
 
-from torch.utils.dlpack import from_dlpack
-
 # ============================================================================
 # Video Processing Functions
 # ============================================================================
@@ -38,20 +36,15 @@ def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, ba
 
         for i in range(0, len(fram_indices), batch_size):
             batch_indices = fram_indices[i:i+batch_size]
-            # batch_images = []
-            # for idx in batch_indices:
-            #     raw_image = vr[idx].asnumpy()
-            #     raw_image = Image.fromarray(raw_image)
-            #     batch_images.append(raw_image)
-            frames = vr.get_batch(batch_indices)
-            # batch_images = [Image.fromarray(f) for f in frames]
-            batch_tensors = [torch.as_tensor(frames.to_dlpack(), device=device).permute(0, 3, 1, 2)]
             
-            if batch_tensors:
+            frames = vr.get_batch(batch_indices)
+            batch_images = [Image.fromarray(f) for f in frames]
+            
+            if batch_images:
                 # Process text and images using CLIP Processor
                 inputs = processor(
                     text=[query],
-                    images=batch_tensors,
+                    images=batch_images,
                     return_tensors="pt",
                     padding=True,
                     truncation=True,
@@ -127,9 +120,7 @@ def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict
                     "video_metadata": {"total_frames": 0, "fps": 0.0, "duration_seconds": 0.0, "budget_used": 0}
                 }
             else:
-                print(f"[Worker {dp_rank}] 비디오 리더 초기화 중...")
                 vr = VideoReader(video_file, ctx=gpu(0))
-                print(f"[Worker {dp_rank}] 비디오 리더 완료")
                 fps = float(vr.get_avg_fps())
                 total_frames = len(vr)
                 video_duration = float(total_frames) / max(1.0, fps)
