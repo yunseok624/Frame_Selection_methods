@@ -37,7 +37,7 @@ def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, ba
         for i in range(0, len(fram_indices), batch_size):
             batch_indices = fram_indices[i:i+batch_size]
             
-            frames = vr.get_batch(batch_indices)
+            frames = vr.get_batch(batch_indices).asnumpy()
             batch_images = [Image.fromarray(f) for f in frames]
             
             if batch_images:
