@@ -93,9 +93,9 @@ def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict
     output_json = os.path.join(full_output_dir, f"{output_json_base_prefix}_rank{dp_rank}.json")
     
     print(f"[Worker {dp_rank}] 모델 로딩 중...")
-    model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
+    model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32", local_files_only=True).to(device)
     print(f"[Worker {dp_rank}] 모델 로딩 완료")
-    processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32", use_fast=False)
+    processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32", use_fast=False, local_files_only=True)
 
     video_root = (args.dataset_path + '/videos' if args.dataset_name == 'longvideobench' else args.dataset_path + '/data')
     rng = np.random.default_rng(args.seed + dp_rank)
@@ -360,7 +360,16 @@ def main():
     gpu_count = torch.cuda.device_count()
     print(f"Available GPUs: {gpu_count}")
 
-    ray.init()
+    print("메인 프로세스에서 모델 사전 캐싱 중...")
+    CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+    CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32", use_fast=False)
+    print("모델 사전 캐싱 완료")
+
+    ray.init(
+        _metrics_export_port=None,
+        include_dashboard=False
+    )
+
     DP_SIZE = gpu_count if gpu_count > 1 else 1
     print(f"Using {DP_SIZE} workers")
 
