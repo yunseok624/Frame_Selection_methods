@@ -25,6 +25,7 @@ from tqdm import tqdm
 from transformers import CLIPProcessor, CLIPModel
 from focus import FOCUS
 
+from torch.utils.dlpack import from_dlpack
 
 # ============================================================================
 # Video Processing Functions
@@ -42,14 +43,15 @@ def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, ba
             #     raw_image = vr[idx].asnumpy()
             #     raw_image = Image.fromarray(raw_image)
             #     batch_images.append(raw_image)
-            frames = vr.get_batch(batch_indices).asnumpy()
-            batch_images = [Image.fromarray(f) for f in frames]
+            frames = vr.get_batch(batch_indices)
+            # batch_images = [Image.fromarray(f) for f in frames]
+            batch_tensors = [torch.as_tensor(frames.to_dlpack(), device=device).permute(0, 3, 1, 2)]
             
-            if batch_images:
+            if batch_tensors:
                 # Process text and images using CLIP Processor
                 inputs = processor(
                     text=[query],
-                    images=batch_images,
+                    images=batch_tensors,
                     return_tensors="pt",
                     padding=True,
                     truncation=True,
@@ -77,6 +79,7 @@ def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, ba
 @ray.remote(num_gpus=1)
 def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict):
     """Ray worker for distributed processing."""
+    print(f"[Worker {dp_rank}] 시작됨")
     worker_start_time = time.time()
 
     class Args: pass
@@ -88,8 +91,10 @@ def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict
     full_output_dir = os.path.join('./selected_frames', args.dataset_name, args.output_dir)
     os.makedirs(full_output_dir, exist_ok=True)
     output_json = os.path.join(full_output_dir, f"{output_json_base_prefix}_rank{dp_rank}.json")
-
+    
+    print(f"[Worker {dp_rank}] 모델 로딩 중...")
     model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
+    print(f"[Worker {dp_rank}] 모델 로딩 완료")
     processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32", use_fast=False)
 
     video_root = (args.dataset_path + '/videos' if args.dataset_name == 'longvideobench' else args.dataset_path + '/data')
@@ -122,7 +127,9 @@ def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict
                     "video_metadata": {"total_frames": 0, "fps": 0.0, "duration_seconds": 0.0, "budget_used": 0}
                 }
             else:
+                print(f"[Worker {dp_rank}] 비디오 리더 초기화 중...")
                 vr = VideoReader(video_file, ctx=gpu(0))
+                print(f"[Worker {dp_rank}] 비디오 리더 완료")
                 fps = float(vr.get_avg_fps())
                 total_frames = len(vr)
                 video_duration = float(total_frames) / max(1.0, fps)
