@@ -150,9 +150,37 @@ def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict
     video_root = (args.dataset_path + '/videos' if args.dataset_name == 'longvideobench' else args.dataset_path + '/data')
     rng = np.random.default_rng(args.seed + dp_rank)
 
+    # Create FOCUS instance once - parameters don't change per video
+    focus = FOCUS(
+        similarity_fn=None, # will be set per video via similarity_fn
+        coarse_every_sec=args.coarse_every_sec,
+        fine_every_sec=args.fine_every_sec,
+        zoom_ratio=args.zoom_ratio,
+        final_min_arms=args.final_min_arms,
+        final_max_arms=args.final_max_arms,
+        min_coarse_segments=args.min_coarse_segments,
+        min_zoom_segments=args.min_zoom_segments,
+        extra_samples_per_region=args.extra_samples_per_region,
+        min_variance_threshold=args.min_variance_threshold,
+        fine_uniform_ratio=args.fine_uniform_ratio,
+        interpolation_method=args.interpolation_method,
+        top_ratio=args.top_ratio,
+        temperature=args.temperature,
+        region_half_window_sec=args.region_half_window_sec
+    )
+
     results = []
     budget_stats = []
     sampling_details_results = []
+
+    EMPTY_SAMPLING_DETAILS = {
+        "coarse_sampling": {"frame_indices": [], "relevance_scores": [], "temporal_order": [], "budget_used": 0},
+        "fine_sampling": {"frame_indices": [], "relevance_scores": [], "temporal_order": [], "budget_used": 0},
+        "arms_info": {"total_arms": 0, "frames_per_arm": 0, "arms": []},
+        "arm_selection_probabilities": [],
+        "final_selected_frames": [],
+        "video_metadata": {"total_frames": 0, "fps": 0.0, "duration_seconds": 0.0, "budget_used": 0}
+    }
     
     pbar = tqdm(data_slice, desc=f"Rank {dp_rank}", ncols=100)
     for original_idx, data in pbar:
@@ -167,14 +195,15 @@ def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict
                 budget_used = 0
                 total_frames = 0
                 video_duration = 0.0
-                sampling_details = {
-                    "coarse_sampling": {"frame_indices": [], "relevance_scores": [], "temporal_order": [], "budget_used": 0},
-                    "fine_sampling": {"frame_indices": [], "relevance_scores": [], "temporal_order": [], "budget_used": 0},
-                    "arms_info": {"total_arms": 0, "frames_per_arm": 0, "arms": []},
-                    "arm_selection_probabilities": [],
-                    "final_selected_frames": [],
-                    "video_metadata": {"total_frames": 0, "fps": 0.0, "duration_seconds": 0.0, "budget_used": 0}
-                }
+                # sampling_details = {
+                #     "coarse_sampling": {"frame_indices": [], "relevance_scores": [], "temporal_order": [], "budget_used": 0},
+                #     "fine_sampling": {"frame_indices": [], "relevance_scores": [], "temporal_order": [], "budget_used": 0},
+                #     "arms_info": {"total_arms": 0, "frames_per_arm": 0, "arms": []},
+                #     "arm_selection_probabilities": [],
+                #     "final_selected_frames": [],
+                #     "video_metadata": {"total_frames": 0, "fps": 0.0, "duration_seconds": 0.0, "budget_used": 0}
+                # }
+                sampling_details = EMPTY_SAMPLING_DETAILS
             else:
                 vr = VideoReader(video_file, ctx=gpu(0))
                 fps = float(vr.get_avg_fps())
@@ -190,27 +219,32 @@ def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict
                     auto_min_gap_sec = min(gap_from_ratio, float(args.min_gap_sec))
 
                 # Create CLIP similarity function
-                similarity_fn = create_clip_similarity_fn(
-                    vr, processor, model, device, args.batch_size
-                    )
+                # similarity_fn = create_clip_similarity_fn(
+                #     vr, processor, model, device, args.batch_size
+                #     )
 
                 # Create FOCUS instance
-                focus = FOCUS(
-                    similarity_fn=similarity_fn,
-                    coarse_every_sec=args.coarse_every_sec,
-                    fine_every_sec=args.fine_every_sec,
-                    zoom_ratio=args.zoom_ratio,
-                    final_min_arms=args.final_min_arms,
-                    final_max_arms=args.final_max_arms,
-                    min_coarse_segments=args.min_coarse_segments,
-                    min_zoom_segments=args.min_zoom_segments,
-                    extra_samples_per_region=args.extra_samples_per_region,
-                    min_variance_threshold=args.min_variance_threshold,
-                    fine_uniform_ratio=args.fine_uniform_ratio,
-                    interpolation_method=args.interpolation_method,
-                    top_ratio=args.top_ratio,
-                    temperature=args.temperature,
-                    region_half_window_sec=args.region_half_window_sec
+                # focus = FOCUS(
+                #     similarity_fn=similarity_fn,
+                #     coarse_every_sec=args.coarse_every_sec,
+                #     fine_every_sec=args.fine_every_sec,
+                #     zoom_ratio=args.zoom_ratio,
+                #     final_min_arms=args.final_min_arms,
+                #     final_max_arms=args.final_max_arms,
+                #     min_coarse_segments=args.min_coarse_segments,
+                #     min_zoom_segments=args.min_zoom_segments,
+                #     extra_samples_per_region=args.extra_samples_per_region,
+                #     min_variance_threshold=args.min_variance_threshold,
+                #     fine_uniform_ratio=args.fine_uniform_ratio,
+                #     interpolation_method=args.interpolation_method,
+                #     top_ratio=args.top_ratio,
+                #     temperature=args.temperature,
+                #     region_half_window_sec=args.region_half_window_sec
+                # )
+
+                # Update similarity function with current video's VideoReader
+                focus.similarity_fn = create_clip_similarity_fn(
+                    vr, processor, model, device, args.batch_size
                 )
 
                 # Select keyframes using FOCUS algorithm
@@ -413,10 +447,8 @@ def main():
     print("모델 사전 캐싱 완료")
 
     ray.init(
-        _metrics_export_port=None,
         include_dashboard=False,
-        logging_level="ERROR",
-        _system_config={"metrics_report_interval_ms": 0}
+        log_to_driver=False
     )
 
     DP_SIZE = gpu_count if gpu_count > 1 else 1
