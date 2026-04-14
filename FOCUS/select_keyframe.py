@@ -81,6 +81,9 @@ def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, ba
 
         with torch.no_grad():
             text_features = model.get_text_features(**text_inputs)
+            # Guard: extract tensor if model returns output object
+            if not isinstance(text_features, torch.Tensor):
+                text_features = text_features.pooler_output
             text_features = text_features / text_features.norm(p=2, dim=-1, keepdim=True)
         
         # Process frames in batches
@@ -99,6 +102,9 @@ def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, ba
 
                 with torch.no_grad():
                     image_features = model.get_image_features(**image_inputs)
+                    # Guard: extract tensor if model returns output object
+                    if not isinstance(image_features, torch.Tensor):
+                        image_features = image_features.pooler_output
                     image_features = image_features / image_features.norm(p=2, dim=-1, keepdim=True)
 
                     # Compute cosine similarity between text and image features
