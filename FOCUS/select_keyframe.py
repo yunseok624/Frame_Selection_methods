@@ -6,9 +6,10 @@ for the FOCUS keyframe extraction algorithm.
 """
 
 import os
-os.environ["RAY_DEDUP_LOGS"] = "1"
+os.environ["RAY_DEDUP_LOGS"] = "0"
 os.environ["RAY_DISABLE_METRICS_COLLECTION"] = "1"
 os.environ["RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO"] = "0"
+os.environ["RAY_USAGE_STATS_ENABLED"] = "0"
 
 import json
 import argparse
@@ -448,7 +449,9 @@ def main():
 
     ray.init(
         include_dashboard=False,
-        # log_to_driver=False
+        _system_config={
+        "metrics_report_interval_ms": -1
+        }
     )
 
     DP_SIZE = gpu_count if gpu_count > 1 else 1
