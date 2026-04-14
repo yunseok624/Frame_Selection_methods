@@ -11,7 +11,7 @@ DATASET_NAME="longvideobench"
 DATASET_PATH="/kaggle/input/datasets/yunseok624/longvideobench"
 OUTPUT_DIR="/kaggle/working/focus_longvideobench_32"
 NUM_KEYFRAMES=32
-BATCH_SIZE=32
+BATCH_SIZE=256
 CLIP_MODEL="base"
 
 # FOCUS-specific parameters

@@ -29,32 +29,81 @@ from focus import FOCUS
 # Video Processing Functions
 # ============================================================================
 
+# def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, batch_size: int):
+#     """Create a CLIP-based similarity function for FOCUS algorithm."""
+#     def similarity_fn(video: VideoReader, query: str, frame_indices: List[int]) -> List[float]:
+#         similarities = []
+
+#         for i in range(0, len(frame_indices), batch_size):
+#             batch_indices = frame_indices[i:i+batch_size]
+            
+#             frames = vr.get_batch(batch_indices).asnumpy()
+#             batch_images = [Image.fromarray(f) for f in frames]
+            
+#             if batch_images:
+#                 # Process text and images using CLIP Processor
+#                 inputs = processor(
+#                     text=[query],
+#                     images=batch_images,
+#                     return_tensors="pt",
+#                     padding=True,
+#                     truncation=True,
+#                     max_length=77
+#                 ).to(device)
+
+#                 with torch.no_grad():
+#                     outputs = model(**inputs)
+#                     # CLIP outputs logits_per_image representing cosine similarity * logit_scale
+#                     batch_similarities = outputs.logits_per_image[:, 0].cpu().tolist()
+
+#                     # Handle case where batch_size is 1 (tolist() returns a float instead of list)
+#                     if isinstance(batch_similarities, float):
+#                         batch_similarities = [batch_similarities]
+                    
+#                     similarities.extend(batch_similarities)
+#         return similarities
+    
+#     return similarity_fn
+
 def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, batch_size: int):
     """Create a CLIP-based similarity function for FOCUS algorithm."""
-    def similarity_fn(video: VideoReader, query: str, fram_indices: List[int]) -> List[float]:
+    def similarity_fn(video: VideoReader, query: str, frame_indices: List[int]) -> List[float]:
         similarities = []
+        
+        # Extract text features once since the query is the same for all frames
+        text_inputs = processor(
+            text=[query],
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=77
+        ).to(device)
 
-        for i in range(0, len(fram_indices), batch_size):
-            batch_indices = fram_indices[i:i+batch_size]
-            
+        with torch.no_grad():
+            text_features = model.get_text_features(**text_inputs)
+            text_features = text_features / text_features.norm(p=2, dim=-1, keepdim=True)
+        
+        # Process frames in batches
+        for i in range(0, len(frame_indices), batch_size):
+            batch_indices = frame_indices[i:i+batch_size]
+
             frames = vr.get_batch(batch_indices).asnumpy()
             batch_images = [Image.fromarray(f) for f in frames]
             
             if batch_images:
-                # Process text and images using CLIP Processor
-                inputs = processor(
-                    text=[query],
+                image_inputs = processor(
                     images=batch_images,
                     return_tensors="pt",
-                    padding=True,
-                    truncation=True,
-                    max_length=77
+                    padding=True
                 ).to(device)
 
                 with torch.no_grad():
-                    outputs = model(**inputs)
-                    # CLIP outputs logits_per_image representing cosine similarity * logit_scale
-                    batch_similarities = outputs.logits_per_image[:, 0].cpu().tolist()
+                    image_features = model.get_image_features(**image_inputs)
+                    image_features = image_features / image_features.norm(p=2, dim=-1, keepdim=True)
+
+                    # Compute cosine similarity between text and image features
+                    batch_similarities = (image_features @ text_features.T) * model.logit_scale.exp()
+                    batch_similarities = batch_similarities.squeeze().cpu().tolist()
 
                     # Handle case where batch_size is 1 (tolist() returns a float instead of list)
                     if isinstance(batch_similarities, float):
@@ -97,8 +146,7 @@ def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict
     budget_stats = []
     sampling_details_results = []
     
-    # pbar = tqdm(data_slice, desc=f"Rank {dp_rank}", ncols=100)
-    pbar = tqdm(data_slice, desc=f"Rank {dp_rank}", ncols=100, position=dp_rank, leave=True)
+    pbar = tqdm(data_slice, desc=f"Rank {dp_rank}", ncols=100)
     for original_idx, data in pbar:
         try:
             text = data['question']
