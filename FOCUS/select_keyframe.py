@@ -6,7 +6,8 @@ for the FOCUS keyframe extraction algorithm.
 """
 
 import os
-os.environ["RAY_DEDUP_LOGS"] = "0"
+os.environ["RAY_DEDUP_LOGS"] = "1"
+os.environ["RAY_DISABLE_METRICS_COLLECTION"] = "1"
 
 import json
 import argparse
@@ -124,7 +125,7 @@ def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, ba
 # Ray Worker Functions
 # ============================================================================
 
-@ray.remote(num_gpus=1)
+@ray.remote(num_gpus=1, num_cpus=2)
 def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict):
     """Ray worker for distributed processing."""
     print(f"[Worker {dp_rank}] 시작됨")
@@ -174,7 +175,7 @@ def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict
                     "video_metadata": {"total_frames": 0, "fps": 0.0, "duration_seconds": 0.0, "budget_used": 0}
                 }
             else:
-                vr = VideoReader(video_file, ctx=gpu(0))
+                vr = VideoReader(video_file, ctx=cpu(0), num_threads=4)
                 fps = float(vr.get_avg_fps())
                 total_frames = len(vr)
                 video_duration = float(total_frames) / max(1.0, fps)
@@ -412,7 +413,9 @@ def main():
 
     ray.init(
         _metrics_export_port=None,
-        include_dashboard=False
+        include_dashboard=False,
+        logging_level="ERROR",
+        _system_config={"metrics_report_interval_ms": 0}
     )
 
     DP_SIZE = gpu_count if gpu_count > 1 else 1
