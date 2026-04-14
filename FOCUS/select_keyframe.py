@@ -261,6 +261,9 @@ def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict
 
                 budget_used = sampling_details["video_metadata"]["budget_used"]
 
+                del var
+                torch.cuda.empty_cache()
+
             results.append({"original_idx": original_idx, "selected_frames": [int(x) for x in selected]})
             budget_stats.append({
                 "original_idx": original_idx,
