@@ -6,7 +6,7 @@ for the FOCUS keyframe extraction algorithm.
 """
 
 import os
-os.environ["RAY_DEDUP_LOGS"] = "0"
+os.environ["RAY_DEDUP_LOGS"] = "1"
 os.environ["RAY_DISABLE_METRICS_COLLECTION"] = "1"
 os.environ["RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO"] = "0"
 
@@ -448,7 +448,7 @@ def main():
 
     ray.init(
         include_dashboard=False,
-        log_to_driver=False
+        # log_to_driver=False
     )
 
     DP_SIZE = gpu_count if gpu_count > 1 else 1
