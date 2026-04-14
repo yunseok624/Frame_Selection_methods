@@ -6,8 +6,9 @@ for the FOCUS keyframe extraction algorithm.
 """
 
 import os
-os.environ["RAY_DEDUP_LOGS"] = "1"
+os.environ["RAY_DEDUP_LOGS"] = "0"
 os.environ["RAY_DISABLE_METRICS_COLLECTION"] = "1"
+os.environ["RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO"] = "0"
 
 import json
 import argparse
@@ -175,7 +176,7 @@ def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict
                     "video_metadata": {"total_frames": 0, "fps": 0.0, "duration_seconds": 0.0, "budget_used": 0}
                 }
             else:
-                vr = VideoReader(video_file, ctx=cpu(0), num_threads=4)
+                vr = VideoReader(video_file, ctx=gpu(0))
                 fps = float(vr.get_avg_fps())
                 total_frames = len(vr)
                 video_duration = float(total_frames) / max(1.0, fps)
@@ -443,20 +444,29 @@ def main():
     print(f"Total videos to process: {len(datas)}")
 
     total = len(datas)
-    per_rank = (total + DP_SIZE - 1) // DP_SIZE
+    # per_rank = (total + DP_SIZE - 1) // DP_SIZE
 
     original_indices = list(range(total))
-    shuffled_indices = original_indices.copy()
-    random.shuffle(shuffled_indices)
-    print(f"Shuffled data indices for load balancing across {DP_SIZE} workers")
+    # shuffled_indices = original_indices.copy()
+    # random.shuffle(shuffled_indices)
+    # print(f"Shuffled data indices for load balancing across {DP_SIZE} workers")
+    slices = [original_indices[i::DP_SIZE] for i in range(DP_SIZE)]
+    print(f"Round-robin data split across {DP_SIZE} workers")
 
+    # args_dict = vars(args)
+    # ray_tasks = []
+    # for dp_rank in range(DP_SIZE):
+    #     start = dp_rank * per_rank
+    #     end = min(start + per_rank, total)
+    #     shuffled_slice_indices = shuffled_indices[start:end]
+    #     data_slice = [(orig_idx, datas[orig_idx]) for orig_idx in shuffled_slice_indices]
+    #     if len(data_slice) > 0:
+    #         ray_tasks.append(ray_worker.remote(dp_rank, output_json_base_prefix, data_slice, args_dict))
+    
     args_dict = vars(args)
     ray_tasks = []
     for dp_rank in range(DP_SIZE):
-        start = dp_rank * per_rank
-        end = min(start + per_rank, total)
-        shuffled_slice_indices = shuffled_indices[start:end]
-        data_slice = [(orig_idx, datas[orig_idx]) for orig_idx in shuffled_slice_indices]
+        data_slice = [(idx, datas[idx]) for idx in slices[dp_rank]]
         if len(data_slice) > 0:
             ray_tasks.append(ray_worker.remote(dp_rank, output_json_base_prefix, data_slice, args_dict))
 
