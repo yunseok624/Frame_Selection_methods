@@ -7,7 +7,6 @@ This module contains only the algorithm logic, without data processing or I/O op
 
 import numpy as np
 import math
-import bisect
 from typing import List, Dict, Tuple, Optional, Callable
 from scipy.interpolate import Rbf
 from decord import VideoReader
@@ -409,18 +408,11 @@ class FOCUS:
         
         for arm in arms:
             # Update with new scores (avoid duplicates)
-            # for idx in arm['sampled_indices']:
-            #     if idx in idx_to_score:
-            #         score = idx_to_score[idx]
-            #         if idx not in [s[0] for s in arm['sampled_scores']]:
-            #             arm['sampled_scores'].append((idx, score))
-
-            # Update with new scores (avoid duplicates using a set for 0(1) lookup)
-            existing_indices = {idx for idx, _ in arm['sampled_scores']}
             for idx in arm['sampled_indices']:
-                if idx in idx_to_score and idx not in existing_indices:
-                    arm['sampled_scores'].append((idx, idx_to_score[idx]))
-                    existing_indices.add(idx)
+                if idx in idx_to_score:
+                    score = idx_to_score[idx]
+                    if idx not in [s[0] for s in arm['sampled_scores']]:
+                        arm['sampled_scores'].append((idx, score))
             
             # Recompute statistics for this arm
             if arm['sampled_scores']:
@@ -616,27 +608,14 @@ class FOCUS:
         
         gap_frames = int(round(min_gap_sec * fps)) if min_gap_sec > 0 else 0
         selected_set = set(selected_frames)
-        # Keep a sorted list of selected frames for efficient gap checking
-        selected_set = sorted(selected_set)
         
-        # def respects_gap(cand: int, chosen_set: set) -> bool:
-        #     """Check if candidate respects minimum gap constraint."""
-        #     if gap_frames <= 0:
-        #         return True
-        #     for frame in chosen_set:
-        #         if abs(cand - frame) < gap_frames:
-        #             return False
-        #     return True
-
-        def respects_gap(cand: int, chosen_sorted: set) -> bool:
-            """Check if candidate respects minimum gap constraint using binary search 0(log n)"""
-            if gap_frames <= 0 or not chosen_sorted:
+        def respects_gap(cand: int, chosen_set: set) -> bool:
+            """Check if candidate respects minimum gap constraint."""
+            if gap_frames <= 0:
                 return True
-            pos = bisect.bisect_left(chosen_sorted, cand)
-            if pos < len(chosen_sorted) and abs(chosen_sorted[pos] - cand) < gap_frames:
-                return False
-            if pos > 0 and abs(chosen_sorted[pos - 1] - cand) < gap_frames:
-                return False
+            for frame in chosen_set:
+                if abs(cand - frame) < gap_frames:
+                    return False
             return True
         
         # Compute number of top arms using zoom_ratio with hard bounds
@@ -683,8 +662,7 @@ class FOCUS:
                     sampled_indices = rng.choice(candidates_to_use, size=actual_count, replace=False)
                     for idx in sampled_indices:
                         new_frames.append(int(idx))
-                        # current_selected_set.add(int(idx))
-                        bisect.insort(current_selected_set, int(idx))
+                        current_selected_set.add(int(idx))
                         arm_selection_counts[arm_idx] += 1
             else:
                 # Interpolation-based sampling within arm
@@ -732,8 +710,7 @@ class FOCUS:
                         for pos in sampled_positions:
                             idx = candidates[pos]
                             new_frames.append(int(idx))
-                            # current_selected_set.add(int(idx))
-                            bisect.insort(current_selected_set, int(idx))
+                            current_selected_set.add(int(idx))
                             arm_selection_counts[arm_idx] += 1
                 else:
                     # Fallback: random sampling
@@ -746,8 +723,7 @@ class FOCUS:
                         sampled_indices = rng.choice(candidates_to_use, size=actual_count, replace=False)
                         for idx in sampled_indices:
                             new_frames.append(int(idx))
-                            # current_selected_set.add(int(idx))
-                            bisect.insort(current_selected_set, int(idx))
+                            current_selected_set.add(int(idx))
                             arm_selection_counts[arm_idx] += 1
         
         # Derive per-arm probabilities from counts
@@ -870,4 +846,3 @@ class FOCUS:
             "final_selected_frames": [int(idx) for idx in selected_frames],
             "video_metadata": video_metadata
         }
-
