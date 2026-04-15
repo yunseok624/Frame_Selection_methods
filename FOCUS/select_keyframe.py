@@ -68,26 +68,26 @@ from focus import FOCUS
     
 #     return similarity_fn
 
-def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, batch_size: int):
+def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, batch_size: int, query: str):
     """Create a CLIP-based similarity function for FOCUS algorithm."""
-    def similarity_fn(video: VideoReader, query: str, frame_indices: List[int]) -> List[float]:
-        similarities = []
-        
-        # Extract text features once since the query is the same for all frames
-        text_inputs = processor(
-            text=[query],
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=77
-        ).to(device)
+    # Extract text features once since the query is the same for all frames
+    text_inputs = processor(
+        text=[query],
+        return_tensors="pt",
+        padding=True,
+        truncation=True,
+        max_length=77
+    ).to(device)
 
-        with torch.no_grad():
-            text_features = model.get_text_features(**text_inputs)
-            # Guard: extract tensor if model returns output object
-            if not isinstance(text_features, torch.Tensor):
-                text_features = text_features.pooler_output
-            text_features = text_features / text_features.norm(p=2, dim=-1, keepdim=True)
+    with torch.no_grad():
+        text_features = model.get_text_features(**text_inputs)
+        # Guard: extract tensor if model returns output object
+        if not isinstance(text_features, torch.Tensor):
+            text_features = text_features.pooler_output
+        text_features = text_features / text_features.norm(p=2, dim=-1, keepdim=True)
+
+    def similarity_fn(frame_indices: List[int]) -> List[float]:
+        similarities = []
         
         # Process frames in batches
         for i in range(0, len(frame_indices), batch_size):
@@ -247,7 +247,7 @@ def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict
 
                 # Update similarity function with current video's VideoReader
                 focus.similarity_fn = create_clip_similarity_fn(
-                    vr, processor, model, device, args.batch_size
+                    vr, processor, model, device, args.batch_size, text
                 )
 
                 # Select keyframes using FOCUS algorithm
