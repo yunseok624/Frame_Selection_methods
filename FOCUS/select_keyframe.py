@@ -98,12 +98,6 @@ def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, ba
         if not isinstance(text_features, torch.Tensor):
             text_features = text_features.pooler_output
         text_features = text_features / text_features.norm(p=2, dim=-1, keepdim=True)
-    
-    gpu_transform = T.Compose([
-        T.Resize((224, 224), antialias=True), # CLIP 입력 사이즈로 GPU 고속 리사이즈
-        T.Normalize(mean=[0.48145466, 0.4578275, 0.40821073], 
-                    std=[0.26862954, 0.26130258, 0.27577711])
-    ])
 
     def similarity_fn(video: VideoReader, query: str,frame_indices: List[int]) -> List[float]:
         """
@@ -124,27 +118,17 @@ def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, ba
             batch_indices = frame_indices[i:i+batch_size]
 
             frames = vr.get_batch(batch_indices).asnumpy()
-            # batch_images = [Image.fromarray(f) for f in frames]
+            batch_images = [Image.fromarray(f) for f in frames]
             
-            if len(frames) > 0 :
-            # if batch_images:
-                # image_inputs = processor(
-                #     images=list(frames), # Avoid PIL transform and use numpy array
-                #     # images=batch_images,
-                #     return_tensors="pt",
-                #     padding=True
-                # ).to(device)
-
-                # numpy (CPU) -> Tensor (GPU)
-                img_tensor = torch.from_numpy(frames).to(device).float() / 255.0
-                img_tensor = img_tensor.permute(0, 3, 1, 2)
-
-                # Preprocess images in GPU
-                pixel_values = gpu_transform(img_tensor)
+            if batch_images:
+                image_inputs = processor(
+                    images=batch_images,
+                    return_tensors="pt",
+                    padding=True
+                ).to(device)
 
                 with torch.no_grad():
-                    # image_features = model.get_image_features(**image_inputs)
-                    image_features = model.get_image_features(pixel_values=pixel_values)
+                    image_features = model.get_image_features(**image_inputs)
                     # Guard: extract tensor if model returns output object
                     if not isinstance(image_features, torch.Tensor):
                         image_features = image_features.pooler_output
