@@ -683,7 +683,8 @@ class FOCUS:
                     sampled_indices = rng.choice(candidates_to_use, size=actual_count, replace=False)
                     for idx in sampled_indices:
                         new_frames.append(int(idx))
-                        current_selected_set.add(int(idx))
+                        # current_selected_set.add(int(idx))
+                        bisect.insort(current_selected_set, int(idx))
                         arm_selection_counts[arm_idx] += 1
             else:
                 # Interpolation-based sampling within arm
@@ -731,7 +732,8 @@ class FOCUS:
                         for pos in sampled_positions:
                             idx = candidates[pos]
                             new_frames.append(int(idx))
-                            current_selected_set.add(int(idx))
+                            # current_selected_set.add(int(idx))
+                            bisect.insort(current_selected_set, int(idx))
                             arm_selection_counts[arm_idx] += 1
                 else:
                     # Fallback: random sampling
@@ -744,7 +746,8 @@ class FOCUS:
                         sampled_indices = rng.choice(candidates_to_use, size=actual_count, replace=False)
                         for idx in sampled_indices:
                             new_frames.append(int(idx))
-                            current_selected_set.add(int(idx))
+                            # current_selected_set.add(int(idx))
+                            bisect.insort(current_selected_set, int(idx))
                             arm_selection_counts[arm_idx] += 1
         
         # Derive per-arm probabilities from counts
