@@ -28,8 +28,6 @@ from tqdm import tqdm
 from transformers import CLIPProcessor, CLIPModel
 from focus import FOCUS
 
-import torchvision.transforms as T
-
 # ============================================================================
 # Video Processing Functions
 # ============================================================================
@@ -125,7 +123,7 @@ def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, ba
                     images=batch_images,
                     return_tensors="pt",
                     padding=True
-                ).to(device)
+                    ).to(device)
 
                 with torch.no_grad():
                     image_features = model.get_image_features(**image_inputs)
