@@ -28,6 +28,8 @@ from tqdm import tqdm
 from transformers import CLIPProcessor, CLIPModel
 from focus import FOCUS
 
+import torchvision.transforms as T
+
 # ============================================================================
 # Video Processing Functions
 # ============================================================================
@@ -69,7 +71,18 @@ from focus import FOCUS
 #     return similarity_fn
 
 def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, batch_size: int, query: str):
-    """Create a CLIP-based similarity function for FOCUS algorithm."""
+    """Create a CLIP-based similarity function for FOCUS algorithm.
+    
+    Args:
+        vr: VideoReader object
+        processor: CLIP processor
+        model: CLIP model
+        device: Device to run inference on
+        batch_size: Batch size for processing
+    
+    Returns:
+        Function with signature (video, query, frame_indices) -> similarity scores
+    """
     # Extract text features once since the query is the same for all frames
     text_inputs = processor(
         text=[query],
@@ -85,8 +98,25 @@ def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, ba
         if not isinstance(text_features, torch.Tensor):
             text_features = text_features.pooler_output
         text_features = text_features / text_features.norm(p=2, dim=-1, keepdim=True)
+    
+    gpu_transform = T.Compose([
+        T.Resize((224, 224), antialias=True), # CLIP 입력 사이즈로 GPU 고속 리사이즈
+        T.Normalize(mean=[0.48145466, 0.4578275, 0.40821073], 
+                    std=[0.26862954, 0.26130258, 0.27577711])
+    ])
 
     def similarity_fn(video: VideoReader, query: str,frame_indices: List[int]) -> List[float]:
+        """
+        Compute CLIP similarity scores for a batch of frame indices.
+        
+        Args:
+            video: VideroReader object (same as vr)
+            query: Query text
+            frame_indices: List of frame indices to compute similarity for
+        
+        Returns:
+            List of similarity scores
+        """
         similarities = []
         
         # Process frames in batches
@@ -96,17 +126,25 @@ def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, ba
             frames = vr.get_batch(batch_indices).asnumpy()
             # batch_images = [Image.fromarray(f) for f in frames]
             
-            if len(frames) > 0 : # Avoid PIL transorm and use numpy array
+            if len(frames) > 0 :
             # if batch_images:
-                image_inputs = processor(
-                    images=list(frames),
-                    # images=batch_images,
-                    return_tensors="pt",
-                    padding=True
-                ).to(device)
+                # image_inputs = processor(
+                #     images=list(frames), # Avoid PIL transform and use numpy array
+                #     # images=batch_images,
+                #     return_tensors="pt",
+                #     padding=True
+                # ).to(device)
+
+                # numpy (CPU) -> Tensor (GPU)
+                img_tensor = torch.from_numpy(frames).to(device).float() / 255.0
+                img_tensor = img_tensor.permute(0, 3, 1, 2)
+
+                # Preprocess images in GPU
+                pixel_values = gpu_transform(img_tensor)
 
                 with torch.no_grad():
-                    image_features = model.get_image_features(**image_inputs)
+                    # image_features = model.get_image_features(**image_inputs)
+                    image_features = model.get_image_features(pixel_values=pixel_values)
                     # Guard: extract tensor if model returns output object
                     if not isinstance(image_features, torch.Tensor):
                         image_features = image_features.pooler_output
