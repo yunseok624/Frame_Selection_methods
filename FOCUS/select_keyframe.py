@@ -32,109 +32,32 @@ from focus import FOCUS
 # Video Processing Functions
 # ============================================================================
 
-# def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, batch_size: int):
-#     """Create a CLIP-based similarity function for FOCUS algorithm."""
-#     def similarity_fn(video: VideoReader, query: str, frame_indices: List[int]) -> List[float]:
-#         similarities = []
-
-#         for i in range(0, len(frame_indices), batch_size):
-#             batch_indices = frame_indices[i:i+batch_size]
-            
-#             frames = vr.get_batch(batch_indices).asnumpy()
-#             batch_images = [Image.fromarray(f) for f in frames]
-            
-#             if batch_images:
-#                 # Process text and images using CLIP Processor
-#                 inputs = processor(
-#                     text=[query],
-#                     images=batch_images,
-#                     return_tensors="pt",
-#                     padding=True,
-#                     truncation=True,
-#                     max_length=77
-#                 ).to(device)
-
-#                 with torch.no_grad():
-#                     outputs = model(**inputs)
-#                     # CLIP outputs logits_per_image representing cosine similarity * logit_scale
-#                     batch_similarities = outputs.logits_per_image[:, 0].cpu().tolist()
-
-#                     # Handle case where batch_size is 1 (tolist() returns a float instead of list)
-#                     if isinstance(batch_similarities, float):
-#                         batch_similarities = [batch_similarities]
-                    
-#                     similarities.extend(batch_similarities)
-#         return similarities
-    
-#     return similarity_fn
-
-def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, batch_size: int, query: str):
-    """Create a CLIP-based similarity function for FOCUS algorithm.
-    
-    Args:
-        vr: VideoReader object
-        processor: CLIP processor
-        model: CLIP model
-        device: Device to run inference on
-        batch_size: Batch size for processing
-    
-    Returns:
-        Function with signature (video, query, frame_indices) -> similarity scores
-    """
-    # Extract text features once since the query is the same for all frames
-    text_inputs = processor(
-        text=[query],
-        return_tensors="pt",
-        padding=True,
-        truncation=True,
-        max_length=77
-    ).to(device)
-
-    with torch.no_grad():
-        text_features = model.get_text_features(**text_inputs)
-        # Guard: extract tensor if model returns output object
-        if not isinstance(text_features, torch.Tensor):
-            text_features = text_features.pooler_output
-        text_features = text_features / text_features.norm(p=2, dim=-1, keepdim=True)
-
-    def similarity_fn(video: VideoReader, query: str,frame_indices: List[int]) -> List[float]:
-        """
-        Compute CLIP similarity scores for a batch of frame indices.
-        
-        Args:
-            video: VideroReader object (same as vr)
-            query: Query text
-            frame_indices: List of frame indices to compute similarity for
-        
-        Returns:
-            List of similarity scores
-        """
+def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, batch_size: int):
+    """Create a CLIP-based similarity function for FOCUS algorithm."""
+    def similarity_fn(video: VideoReader, query: str, frame_indices: List[int]) -> List[float]:
         similarities = []
-        
-        # Process frames in batches
+
         for i in range(0, len(frame_indices), batch_size):
             batch_indices = frame_indices[i:i+batch_size]
-
+            
             frames = vr.get_batch(batch_indices).asnumpy()
             batch_images = [Image.fromarray(f) for f in frames]
             
             if batch_images:
-                image_inputs = processor(
+                # Process text and images using CLIP Processor
+                inputs = processor(
+                    text=[query],
                     images=batch_images,
                     return_tensors="pt",
-                    padding=True
-                    ).to(device)
+                    padding=True,
+                    truncation=True,
+                    max_length=77
+                ).to(device)
 
                 with torch.no_grad():
-                    image_features = model.get_image_features(**image_inputs)
-                    # Guard: extract tensor if model returns output object
-                    if not isinstance(image_features, torch.Tensor):
-                        image_features = image_features.pooler_output
-                    image_features = image_features / image_features.norm(p=2, dim=-1, keepdim=True)
-
-                    # Compute cosine similarity between text and image features
-                    batch_similarities = (image_features @ text_features.T) * model.logit_scale.exp()
-                    batch_similarities = batch_similarities.squeeze().cpu().tolist()
+                    outputs = model(**inputs)
+                    # CLIP outputs logits_per_image representing cosine similarity * logit_scale
+                    batch_similarities = outputs.logits_per_image[:, 0].cpu().tolist()
 
                     # Handle case where batch_size is 1 (tolist() returns a float instead of list)
                     if isinstance(batch_similarities, float):
@@ -144,6 +67,83 @@ def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, ba
         return similarities
     
     return similarity_fn
+
+# def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, batch_size: int, query: str):
+#     """Create a CLIP-based similarity function for FOCUS algorithm.
+    
+#     Args:
+#         vr: VideoReader object
+#         processor: CLIP processor
+#         model: CLIP model
+#         device: Device to run inference on
+#         batch_size: Batch size for processing
+    
+#     Returns:
+#         Function with signature (video, query, frame_indices) -> similarity scores
+#     """
+#     # Extract text features once since the query is the same for all frames
+#     text_inputs = processor(
+#         text=[query],
+#         return_tensors="pt",
+#         padding=True,
+#         truncation=True,
+#         max_length=77
+#     ).to(device)
+
+#     with torch.no_grad():
+#         text_features = model.get_text_features(**text_inputs)
+#         # Guard: extract tensor if model returns output object
+#         if not isinstance(text_features, torch.Tensor):
+#             text_features = text_features.pooler_output
+#         text_features = text_features / text_features.norm(p=2, dim=-1, keepdim=True)
+
+#     def similarity_fn(video: VideoReader, query: str,frame_indices: List[int]) -> List[float]:
+#         """
+#         Compute CLIP similarity scores for a batch of frame indices.
+        
+#         Args:
+#             video: VideroReader object (same as vr)
+#             query: Query text
+#             frame_indices: List of frame indices to compute similarity for
+        
+#         Returns:
+#             List of similarity scores
+#         """
+#         similarities = []
+        
+#         # Process frames in batches
+#         for i in range(0, len(frame_indices), batch_size):
+#             batch_indices = frame_indices[i:i+batch_size]
+
+#             frames = vr.get_batch(batch_indices).asnumpy()
+#             batch_images = [Image.fromarray(f) for f in frames]
+            
+#             if batch_images:
+#                 image_inputs = processor(
+#                     images=batch_images,
+#                     return_tensors="pt",
+#                     padding=True
+#                     ).to(device)
+
+#                 with torch.no_grad():
+#                     image_features = model.get_image_features(**image_inputs)
+#                     # Guard: extract tensor if model returns output object
+#                     if not isinstance(image_features, torch.Tensor):
+#                         image_features = image_features.pooler_output
+#                     image_features = image_features / image_features.norm(p=2, dim=-1, keepdim=True)
+
+#                     # Compute cosine similarity between text and image features
+#                     batch_similarities = (image_features @ text_features.T) * model.logit_scale.exp()
+#                     batch_similarities = batch_similarities.squeeze().cpu().tolist()
+
+#                     # Handle case where batch_size is 1 (tolist() returns a float instead of list)
+#                     if isinstance(batch_similarities, float):
+#                         batch_similarities = [batch_similarities]
+                    
+#                     similarities.extend(batch_similarities)
+#         return similarities
+    
+#     return similarity_fn
 
 # ============================================================================
 # Ray Worker Functions
@@ -267,8 +267,11 @@ def ray_worker(dp_rank: int, output_json_base_prefix: str, data_slice, args_dict
 
                 # Update similarity function with current video's VideoReader
                 focus.similarity_fn = create_clip_similarity_fn(
-                    vr, processor, model, device, args.batch_size, text
+                    vr, processor, model, device, args.batch_size
                 )
+                # focus.similarity_fn = create_clip_similarity_fn(
+                #     vr, processor, model, device, args.batch_size, text
+                # )
 
                 # Select keyframes using FOCUS algorithm
                 selected, sampling_details = focus.select_keyframes(
