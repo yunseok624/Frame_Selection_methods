@@ -86,7 +86,7 @@ def create_clip_similarity_fn(vr: VideoReader, processor, model, device: str, ba
             text_features = text_features.pooler_output
         text_features = text_features / text_features.norm(p=2, dim=-1, keepdim=True)
 
-    def similarity_fn(frame_indices: List[int]) -> List[float]:
+    def similarity_fn(video: VideoReader, query: str,frame_indices: List[int]) -> List[float]:
         similarities = []
         
         # Process frames in batches
